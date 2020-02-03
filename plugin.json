@@ -1,0 +1,34 @@
+{
+  "slug": "Rage",
+  "name": "Rage",
+  "version": "1.0.0",
+  "license": "CC-BY-NC-4.0",
+  "brand": "Rage",
+  "author": "Azeez Abass",
+  "authorEmail": "abassazeez6@gmail.com",
+  "authorUrl": "https://github.com/ducklin5",
+  "pluginUrl": "",
+  "manualUrl": "",
+  "sourceUrl": "",
+  "donateUrl": "",
+  "changelogUrl": "",
+  "modules": [
+    {
+      "slug": "Blank",
+      "name": "Blank",
+      "description": "Blank",
+      "tags": [
+        "Blank",
+        "Visual"
+      ]
+    },
+    {
+      "slug": "Crusher",
+      "name": "Crusher",
+      "description": "",
+      "tags": [
+        "Distortion"
+      ]
+    }
+  ]
+}

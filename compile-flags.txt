@@ -1,0 +1,17 @@
+-std=c++14
+-Wsuggest-override
+-fPIC
+-I../Rack-SDK/include
+-I../Rack-SDK/dep/include
+-MMD
+-MP 
+-g
+-O3
+-march=nocona
+-funsafe-math-optimizations
+-Wall
+-Wextra
+-Wno-unused-parameter
+-DARCH_WIN
+-D_USE_MATH_DEFINES
+ 
