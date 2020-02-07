@@ -29,6 +29,16 @@
       "tags": [
         "Distortion"
       ]
+    },
+    {
+      "slug": "Resolve",
+      "name": "Resolve",
+      "description": "8 to 1 triggered switch",
+      "tags": [
+        "Switch",
+        "Polyphonic",
+        "Utility"
+      ]
     }
   ]
 }
