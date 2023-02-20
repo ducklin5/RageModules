@@ -1,15 +1,15 @@
 {
   "slug": "Rage",
   "name": "Rage",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "license": "CC-BY-NC-4.0",
   "brand": "Rage",
   "author": "Azeez Abass",
   "authorEmail": "abassazeez6@gmail.com",
   "authorUrl": "https://github.com/ducklin5",
-  "pluginUrl": "",
-  "manualUrl": "",
-  "sourceUrl": "",
+  "pluginUrl": "https://github.com/ducklin5/RageModules",
+  "manualUrl": "https://github.com/ducklin5/RageModules",
+  "sourceUrl": "https://github.com/ducklin5/RageModules",
   "donateUrl": "",
   "changelogUrl": "",
   "modules": [
@@ -23,21 +23,11 @@
       ]
     },
     {
-      "slug": "Crusher",
-      "name": "Crusher",
-      "description": "",
-      "tags": [
-        "Distortion"
-      ]
-    },
-    {
       "slug": "Resolve",
       "name": "Resolve",
-      "description": "8 to 1 triggered switch",
+      "description": "Resolve",
       "tags": [
-        "Switch",
-        "Polyphonic",
-        "Utility"
+        "Switch"
       ]
     }
   ]
