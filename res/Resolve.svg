@@ -1,6 +1,4 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!-- Created with Inkscape (http://www.inkscape.org/) -->
-
 <svg
    xmlns:osb="http://www.openswatchbook.org/uri/2009/osb"
    xmlns:dc="http://purl.org/dc/elements/1.1/"
@@ -16,7 +14,7 @@
    viewBox="0 0 30.479999 128.5"
    version="1.1"
    id="svg8"
-   inkscape:version="0.92.4 (5da689c313, 2019-01-14)"
+   inkscape:version="1.0.1 (3bc2e813f5, 2020-09-07)"
    sodipodi:docname="Resolve.svg"
    enable-background="new">
   <defs
@@ -167,16 +165,16 @@
      inkscape:pageshadow="2"
      inkscape:zoom="2.8284271"
      inkscape:cx="108.50131"
-     inkscape:cy="225.6965"
+     inkscape:cy="197.41223"
      inkscape:document-units="mm"
-     inkscape:current-layer="layer2"
+     inkscape:current-layer="layer3"
      showgrid="true"
      inkscape:lockguides="true"
      showguides="false"
-     inkscape:window-width="1920"
-     inkscape:window-height="1017"
-     inkscape:window-x="-9"
-     inkscape:window-y="29"
+     inkscape:window-width="2560"
+     inkscape:window-height="1369"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
      inkscape:window-maximized="1"
      objecttolerance="11"
      guidetolerance="20"
@@ -189,7 +187,8 @@
      inkscape:object-paths="true"
      inkscape:snap-bbox="true"
      inkscape:snap-bbox-edge-midpoints="true"
-     inkscape:snap-global="true">
+     inkscape:snap-global="true"
+     inkscape:document-rotation="0">
     <inkscape:grid
        type="xygrid"
        id="grid7345"
@@ -267,7 +266,7 @@
     <flowRoot
        xml:space="preserve"
        id="flowRoot915"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:13.33333302px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:13.3333px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none"
        transform="scale(0.26458333)"><flowRegion
          id="flowRegion917"><rect
            id="rect919"
@@ -275,17 +274,13 @@
            height="14.173228"
            x="70.866142"
            y="41.574802" /></flowRegion><flowPara
-         id="flowPara921"></flowPara></flowRoot>    <text
+         id="flowPara921" /></flowRoot>
+    <text
        id="text937"
        y="9.75"
        x="11.577642"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.05555534px;line-height:0;font-family:'Anonymous Pro for Powerline';-inkscape-font-specification:'Anonymous Pro for Powerline';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332"
-       xml:space="preserve"><tspan
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.05555534px;line-height:4.40972233px;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';text-align:start;letter-spacing:0px;word-spacing:0.50270832px;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:#b4d214;fill-opacity:1;stroke-width:0.26458332"
-         y="11.992757"
-         x="11.577642"
-         sodipodi:role="line"
-         id="tspan949" /></text>
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.05556px;line-height:0;font-family:'Anonymous Pro for Powerline';-inkscape-font-specification:'Anonymous Pro for Powerline';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       xml:space="preserve" />
     <g
        aria-label="resolve"
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.05555534px;line-height:10;font-family:'Unfolding Tragedy';-inkscape-font-specification:'Unfolding Tragedy';letter-spacing:0px;word-spacing:0px;fill:#a0dc28;fill-opacity:1;stroke:none;stroke-width:0.26458332"
@@ -405,117 +400,105 @@
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:19.7555542px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;display:inline;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332"
        id="text894-3" />
     <path
-       style="display:inline;fill:none;stroke:#404040;stroke-width:0.27237865;stroke-linecap:round;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
-       d="m 11.25,41.14392 c 0,63.60608 0,63.60608 0,63.60608"
+       style="display:inline;fill:none;stroke:#404040;stroke-width:0.294915;stroke-linecap:round;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1"
+       d="m 11.25,30.159658 c 0,74.566872 0,74.566872 0,74.566872"
        id="path1020"
        inkscape:connector-curvature="0" />
     <rect
-       style="display:inline;opacity:1;fill:#404040;fill-opacity:1;fill-rule:evenodd;stroke-width:0.26349643;paint-order:stroke fill markers"
+       style="display:inline;opacity:1;fill:#404040;fill-opacity:1;fill-rule:evenodd;stroke-width:0.263496;paint-order:stroke fill markers"
        width="28.75"
        height="7.5"
        x="1.25"
-       y="36"
+       y="24.162045"
        id="rect1790-7"
        rx="1.25"
        ry="1.25" />
     <text
        xml:space="preserve"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52777767px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
        x="2.5"
        y="34.75"
-       id="text1997"><tspan
-         sodipodi:role="line"
-         id="tspan1995"
-         x="2.5"
-         y="37.858841"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';stroke-width:0.26458332" /></text>
+       id="text1997" />
     <text
        xml:space="preserve"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52777767px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.26458332"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.52778px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.264583"
        x="3.75"
        y="33.499996"
-       id="text2001"><tspan
-         sodipodi:role="line"
-         id="tspan1999"
-         x="3.75"
-         y="36.608837"
-         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';stroke-width:0.26458332" /></text>
+       id="text2001" />
     <g
        aria-label="Trig"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222223px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.26458332"
-       id="text2005">
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       id="text2005"
+       transform="translate(0,-11.837955)">
       <path
          d="M 2.9818886,38.499756 H 4.370422 v 0.220133 H 3.7946887 v 1.755422 H 3.557622 V 38.719889 H 2.9818886 Z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2153"
          inkscape:connector-curvature="0" />
       <path
          d="m 4.7043702,39.075489 h 0.508 v 0.186267 h 0.033867 q 0.053622,-0.115711 0.1524,-0.169334 0.098778,-0.05644 0.2257777,-0.05644 0.2116667,0 0.3414889,0.138289 0.1298223,0.138289 0.1382889,0.403578 l -0.2314222,0.03387 q 0,-0.194733 -0.093133,-0.2794 -0.093133,-0.08749 -0.2286,-0.08749 -0.087489,0 -0.1524,0.03387 -0.062089,0.03387 -0.1044223,0.09313 -0.042333,0.05927 -0.062089,0.138289 -0.019756,0.07902 -0.019756,0.169334 v 0.592666 h 0.3556 v 0.2032 H 4.6705035 v -0.2032 H 4.9922369 V 39.278689 H 4.7043702 Z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2155"
          inkscape:connector-curvature="0" />
       <path
          d="m 6.9433184,38.6578 q 0,-0.08184 0.056445,-0.138289 0.059267,-0.05927 0.1411111,-0.05927 0.081844,0 0.1382889,0.05927 0.059267,0.05644 0.059267,0.138289 0,0.08185 -0.059267,0.141111 -0.056445,0.05645 -0.1382889,0.05645 -0.081844,0 -0.1411111,-0.05645 -0.056445,-0.05927 -0.056445,-0.141111 z M 6.5425629,40.272111 H 7.0336295 V 39.278689 H 6.5933629 v -0.2032 h 0.6604 v 1.196622 h 0.4572 v 0.2032 h -1.1684 z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2157"
          inkscape:connector-curvature="0" />
       <path
          d="m 9.2979779,40.260822 h -0.033867 q -0.067733,0.127 -0.1862667,0.191912 -0.1157111,0.06209 -0.254,0.06209 -0.1411111,0 -0.2652889,-0.04798 Q 8.4343779,40.418867 8.3384223,40.328556 8.245289,40.238245 8.1888445,40.1056 8.1352223,39.970133 8.1352223,39.797978 v -0.04516 q 0,-0.169333 0.056444,-0.301977 0.056444,-0.135467 0.1495778,-0.225778 0.093133,-0.09313 0.2173111,-0.141111 0.1241778,-0.04798 0.2596445,-0.04798 0.1524,0 0.2652889,0.06773 0.1157111,0.06491 0.1806222,0.191911 h 0.033867 V 39.07548 h 0.2201333 v 1.744133 q 0,0.09596 -0.062089,0.158045 -0.059267,0.06209 -0.1552222,0.06209 H 8.3892223 v -0.2032 h 0.8325556 q 0.0762,0 0.0762,-0.08467 z m -0.4684889,0.04516 q 0.098778,0 0.1834444,-0.03669 0.084667,-0.03669 0.1467556,-0.104422 0.064911,-0.06773 0.1016,-0.160867 0.036689,-0.09595 0.036689,-0.211667 v -0.03387 q 0,-0.112889 -0.036689,-0.206022 -0.036689,-0.09596 -0.1016,-0.163689 -0.062089,-0.06773 -0.1495778,-0.104423 -0.084667,-0.03951 -0.1806222,-0.03951 -0.098778,0 -0.1862667,0.03669 -0.084667,0.03669 -0.1495778,0.104422 -0.062089,0.06773 -0.098778,0.160867 -0.033867,0.09313 -0.033867,0.206022 v 0.04516 q 0,0.118533 0.033867,0.211667 0.036689,0.09313 0.098778,0.160866 0.064911,0.06491 0.1495778,0.1016 0.084667,0.03387 0.1862667,0.03387 z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2159"
          inkscape:connector-curvature="0" />
     </g>
     <g
        aria-label="InA"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222223px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.26458332"
-       id="text2009">
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       id="text2009"
+       transform="translate(0,-11.837955)">
       <path
          d="m 13.865708,38.762222 h 1.253066 v 0.220133 h -0.508 v 1.535289 h 0.508 v 0.220134 h -1.253066 v -0.220134 h 0.508 v -1.535289 h -0.508 z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2162"
          inkscape:connector-curvature="0" />
       <path
          d="m 15.819612,40.737778 h -0.220134 v -1.399823 h 0.220134 v 0.237067 h 0.03387 q 0.129822,-0.276578 0.451556,-0.276578 0.242711,0 0.386644,0.1524 0.143934,0.149578 0.143934,0.451556 v 0.835378 h -0.220134 v -0.790223 q 0,-0.220133 -0.09878,-0.3302 -0.09878,-0.110066 -0.268111,-0.110066 -0.200377,0 -0.316089,0.138289 -0.112888,0.135466 -0.112888,0.364066 z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2164"
          inkscape:connector-curvature="0" />
       <path
          d="m 18.366182,40.246711 h -0.846667 l -0.143933,0.491067 h -0.254 l 0.598311,-1.975556 h 0.445911 l 0.598311,1.975556 h -0.254 z m -0.440267,-1.382889 -0.341489,1.162756 h 0.716845 l -0.341489,-1.162756 z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2166"
          inkscape:connector-curvature="0" />
     </g>
     <g
        aria-label="InB"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222223px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.26458332"
-       id="text2013">
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.264583"
+       id="text2013"
+       transform="translate(0,-11.837955)">
       <path
          d="m 22.617119,38.781978 h 1.253067 v 0.220134 h -0.508 v 1.535289 h 0.508 v 0.220133 h -1.253067 v -0.220133 h 0.508 v -1.535289 h -0.508 z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2169"
          inkscape:connector-curvature="0" />
       <path
          d="M 24.571023,40.757534 H 24.35089 v -1.399822 h 0.220133 v 0.237066 h 0.03387 q 0.129822,-0.276577 0.451555,-0.276577 0.242711,0 0.386645,0.1524 0.143933,0.149577 0.143933,0.451555 v 0.835378 H 25.36689 v -0.790222 q 0,-0.220134 -0.09878,-0.3302 -0.09878,-0.110067 -0.268111,-0.110067 -0.200378,0 -0.316089,0.138289 -0.112889,0.135467 -0.112889,0.364067 z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2171"
          inkscape:connector-curvature="0" />
       <path
          d="m 25.991527,40.537401 h 0.169333 v -1.535289 h -0.169333 v -0.220134 h 0.798689 q 0.141111,0 0.248355,0.03951 0.110067,0.03951 0.183445,0.107244 0.0762,0.06773 0.112889,0.163689 0.03951,0.09313 0.03951,0.2032 v 0.03387 q 0,0.08184 -0.0254,0.149577 -0.0254,0.06773 -0.07056,0.121356 -0.04515,0.05362 -0.107244,0.09313 -0.05927,0.03669 -0.129823,0.05644 v 0.03387 q 0.141112,0.03951 0.237067,0.1524 0.09596,0.110067 0.09596,0.270934 v 0.03387 q 0,0.110067 -0.03951,0.206023 -0.03669,0.09313 -0.112889,0.163688 -0.07338,0.06773 -0.183445,0.107245 -0.107244,0.03951 -0.248355,0.03951 h -0.798689 z m 0.4064,0 h 0.375355 q 0.166511,0 0.270934,-0.08185 0.104422,-0.08467 0.104422,-0.231422 v -0.01693 q 0,-0.1524 -0.09878,-0.239889 Q 26.951078,39.877 26.781747,39.877 h -0.383822 z m 0,-0.880534 h 0.383822 q 0.169333,0 0.268111,-0.08749 0.09878,-0.08749 0.09878,-0.239888 v -0.01693 q 0,-0.143933 -0.104422,-0.225778 -0.104423,-0.08467 -0.270934,-0.08467 h -0.375355 z"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
          id="path2173"
          inkscape:connector-curvature="0" />
     </g>
     <text
        xml:space="preserve"
-       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222223px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.26458332"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.264583"
        x="2.5"
        y="109.75"
-       id="text2021"><tspan
-         sodipodi:role="line"
-         id="tspan2019"
-         x="2.5"
-         y="112.23707"
-         style="fill:#ffffff;fill-opacity:1;stroke-width:0.26458332" /></text>
+       id="text2021" />
     <g
        aria-label="Trig"
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.82222223px;line-height:1.25;font-family:'SpaceMono Nerd Font';-inkscape-font-specification:'SpaceMono Nerd Font';letter-spacing:0px;word-spacing:0px;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.26458332"
