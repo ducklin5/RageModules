@@ -6,7 +6,7 @@
     },
     "Bash-MSYS2-mingw64": {
       "path": "C:/msys64/usr/bin/bash.exe",
-      "args": ["--login", "-i"],
+      "args": ["--login"],
       "env": {
         "MSYSTEM": "MINGW64",
         "CHERE_INVOKING": "1"
@@ -14,4 +14,4 @@
     }
   },
   "terminal.integrated.defaultProfile.windows": "Bash-MSYS2-mingw64",
-}
+  }

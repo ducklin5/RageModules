@@ -1,0 +1,5 @@
+Language: Cpp
+BasedOnStyle: Google
+ColumnLimit: 120
+Standard: c++11
+TabWidth: 4

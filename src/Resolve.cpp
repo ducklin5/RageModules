@@ -1,7 +1,5 @@
 #include <algorithm>
-
 #include "plugin.hpp"
-
 
 struct Resolve : Module {
 	static const int NUM_TRIGIN = 6;
@@ -11,27 +9,27 @@ struct Resolve : Module {
 		NUM_PARAMS
 	};
 	enum InputIds {
-		TRIG0_INPUT, IN0A_INPUT, IN0B_INPUT,
-		TRIG1_INPUT, IN1A_INPUT, IN1B_INPUT,
-		TRIG2_INPUT, IN2A_INPUT, IN2B_INPUT,
-		TRIG3_INPUT, IN3A_INPUT, IN3B_INPUT,
-		TRIG4_INPUT, IN4A_INPUT, IN4B_INPUT,
-		TRIG5_INPUT, IN5A_INPUT, IN5B_INPUT,
+		INPUT_TRIG0, INPUT_IN0A, INPUT_IN0B,
+		INPUT_TRIG1, INPUT_IN1A, INPUT_IN1B,
+		INPUT_TRIG2, INPUT_IN2A, INPUT_IN2B,
+		INPUT_TRIG3, INPUT_IN3A, INPUT_IN3B,
+		INPUT_TRIG4, INPUT_IN4A, INPUT_IN4B,
+		INPUT_TRIG5, INPUT_IN5A, INPUT_IN5B,
 		NUM_INPUTS
 	};
 	enum OutputIds {
-		TRIG_OUTPUT,
-		OUTA_OUTPUT,
-		OUTB_OUTPUT,
+		OUTPUT_TRIG,
+		OUTPUT_OUTA,
+		OUTPUT_OUTB,
 		NUM_OUTPUTS
 	};
 	enum LightIds {
-		LED0_LIGHT,
-		LED1_LIGHT,
-		LED2_LIGHT,
-		LED3_LIGHT,
-		LED4_LIGHT,
-		LED5_LIGHT,
+		LIGHT_LED0,
+		LIGHT_LED1,
+		LIGHT_LED2,
+		LIGHT_LED3,
+		LIGHT_LED4,
+		LIGHT_LED5,
 		NUM_LIGHTS
 	};
 
@@ -64,17 +62,17 @@ struct Resolve : Module {
 			selected_channels[i] = inputs[selected*3+i].getChannels();
 		};
 		
-		outputs[TRIG_OUTPUT].setChannels(selected_channels[0]);
-		outputs[OUTA_OUTPUT].setChannels(selected_channels[1]);
-		outputs[OUTB_OUTPUT].setChannels(selected_channels[2]);
+		outputs[OUTPUT_TRIG].setChannels(selected_channels[0]);
+		outputs[OUTPUT_OUTA].setChannels(selected_channels[1]);
+		outputs[OUTPUT_OUTB].setChannels(selected_channels[2]);
 		
 		for (int i = 0; i < 3; i++) {
 			output_voltages[i] = inputs[selected*3+i].getVoltages();
 		}
 
-		outputs[TRIG_OUTPUT].writeVoltages(output_voltages[0]);
-		outputs[OUTA_OUTPUT].writeVoltages(output_voltages[1]);
-		outputs[OUTB_OUTPUT].writeVoltages(output_voltages[2]);
+		outputs[OUTPUT_TRIG].writeVoltages(output_voltages[0]);
+		outputs[OUTPUT_OUTA].writeVoltages(output_voltages[1]);
+		outputs[OUTPUT_OUTB].writeVoltages(output_voltages[2]);
 
 
 		for (int tid=0; tid < NUM_TRIGIN; tid++) {
@@ -102,9 +100,9 @@ struct ResolveWidget : ModuleWidget {
 			addChild(createLightCentered<MediumLight<RedLight>>(mm2px(Vec(11.25, y+3.0)), module, i));
 		}
 		
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(6.25, 107.25)), module, Resolve::TRIG_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(16.25, 107.25)), module, Resolve::OUTA_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(25.0, 107.25)), module, Resolve::OUTB_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(6.25, 107.25)), module, Resolve::OUTPUT_TRIG));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(16.25, 107.25)), module, Resolve::OUTPUT_OUTA));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(25.0, 107.25)), module, Resolve::OUTPUT_OUTB));
 	}
 };
 

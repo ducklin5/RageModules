@@ -1,0 +1,4 @@
+[submodule "dep/babycat"]
+    path = dep/babycat
+    url = git@github.com:ducklin5/babycat.git
+    branch = feat/enableCpp
