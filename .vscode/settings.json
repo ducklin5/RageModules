@@ -6,12 +6,34 @@
     },
     "Bash-MSYS2-mingw64": {
       "path": "C:/msys64/usr/bin/bash.exe",
+      "args": ["--login", ],
+      "env": {
+        "MSYSTEM": "MINGW64",
+        "CHERE_INVOKING": "1"
+      }
+    },
+    "Zsh-MSYS2-mingw64": {
+      "path": "C:/msys64/usr/bin/zsh.exe",
       "args": ["--login"],
       "env": {
         "MSYSTEM": "MINGW64",
         "CHERE_INVOKING": "1"
       }
-    }
+    },
+   
   },
+
   "terminal.integrated.defaultProfile.windows": "Bash-MSYS2-mingw64",
-  }
+  "debug.internalConsoleOptions": "openOnSessionStart",
+  //"terminal.integrated.unicodeVersion": "6",
+  "terminal.integrated.fontFamily": "CaskaydiaCove NF",
+  "terminal.integrated.customGlyphs": true,
+  "terminal.integrated.allowChords": true,
+  "terminal.integrated.detectLocale": "off",
+  "cmake.configureOnOpen": false,
+  "files.associations": {
+    "string": "cpp"
+  },
+  // "terminal.integrated.windowsEnableConpty": true,
+
+}

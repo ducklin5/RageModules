@@ -15,7 +15,7 @@
    version="1.1"
    id="svg8"
    inkscape:version="1.0.1 (3bc2e813f5, 2020-09-07)"
-   sodipodi:docname="Reflux.svg"
+   sodipodi:docname="Reflux2.svg"
    enable-background="new"
    inkscape:label="SpacingSquare">
   <defs
@@ -249,9 +249,9 @@
      borderopacity="1.0"
      inkscape:pageopacity="0.0"
      inkscape:pageshadow="2"
-     inkscape:zoom="1.8101934"
-     inkscape:cx="304.81708"
-     inkscape:cy="332.58847"
+     inkscape:zoom="2.5600001"
+     inkscape:cx="304.51696"
+     inkscape:cy="263.21905"
      inkscape:document-units="cm"
      inkscape:current-layer="layer2"
      showgrid="true"
@@ -304,7 +304,7 @@
         <dc:format>image/svg+xml</dc:format>
         <dc:type
            rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
-        <dc:title />
+        <dc:title></dc:title>
       </cc:Work>
     </rdf:RDF>
   </metadata>
@@ -478,38 +478,35 @@
        height="27.500002"
        x="2.5"
        y="95.500008"
-       inkscape:label="rect64"
-       ry="2.4999962" />
+       inkscape:label="rect64" />
     <rect
        style="fill:#1e90ff;stroke:#000000;stroke-width:0"
        id="rect69"
-       width="89.5"
-       height="29.5"
+       width="117.50001"
+       height="23"
        x="2.5"
-       y="63.500004"
-       inkscape:label="rect64"
-       ry="2.4999988" />
+       y="70"
+       inkscape:label="rect64" />
     <path
        style="fill:#1e90ff;stroke:#000000;stroke-width:0;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;image-rendering:pixelated"
        id="path936"
        width="25.499996"
-       height="31.838806"
+       height="32.677612"
        x="-120.00001"
-       y="0.16119447"
+       y="0.16119449"
        inkscape:label="rect64"
        sodipodi:type="rect"
        inkscape:path-effect="#path-effect938"
-       d="m -120.00001,0.16119447 h 25.499999 V 29.161195 a 2.8388056,2.8388056 135 0 1 -2.838806,2.838806 H -117.1612 a 2.8388056,2.8388056 45 0 1 -2.83881,-2.838806 z"
+       d="m -120.00001,0.16119449 h 25.499999 V 30.000001 a 2.8388056,2.8388056 135 0 1 -2.838806,2.838806 H -117.1612 a 2.8388056,2.8388056 45 0 1 -2.83881,-2.838806 z"
        transform="scale(-1,1)" />
     <rect
        style="fill:#1e90ff;stroke:#000000;stroke-width:0"
        id="rect946"
-       width="89.5"
-       height="26.500002"
+       width="38.5"
+       height="33"
        x="2.5"
        y="34.5"
-       inkscape:label="rect64"
-       ry="2.5000014" />
+       inkscape:label="rect64" />
     <rect
        style="display:inline;fill:#1e90ff;stroke:#000000;stroke-width:0"
        id="rect64-5"
@@ -517,26 +514,31 @@
        height="27.5"
        x="50.000004"
        y="95.500008"
-       inkscape:label="rect64"
-       ry="2.4999962" />
+       inkscape:label="rect64" />
     <rect
        style="display:inline;fill:#1e90ff;stroke:#000000;stroke-width:0"
        id="rect963"
-       width="25.500002"
-       height="77.824867"
-       x="94.5"
-       y="34.5"
-       inkscape:label="rect64"
-       ry="2.5000014" />
+       width="28.99999"
+       height="17"
+       x="91.000008"
+       y="95.500008"
+       inkscape:label="rect64" />
     <rect
        style="fill:#1e90ff;stroke:#000000;stroke-width:0"
-       id="rect185"
-       width="44.75"
-       height="18"
-       x="47.250004"
-       y="14.000001"
-       inkscape:label="rect64"
-       ry="2.6871746" />
+       id="rect86"
+       width="42"
+       height="33.000004"
+       x="43.5"
+       y="34.5"
+       inkscape:label="rect64" />
+    <rect
+       style="display:inline;fill:#1e90ff;stroke:#000000;stroke-width:0"
+       id="rect86-9"
+       width="32.000008"
+       height="33.000004"
+       x="88.000008"
+       y="34.5"
+       inkscape:label="rect64" />
   </g>
   <g
      aria-label="reflux"
@@ -570,10 +572,10 @@
        id="path66" />
   </g>
   <rect
-     style="display:none;fill:#ff0000;stroke:#000000;stroke-width:0;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none"
+     style="display:inline;fill:#ff0000;stroke:#000000;stroke-width:0;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none"
      id="rect981"
-     width="2.2737629"
-     height="2.2737629"
-     x="0.20000124"
-     y="61.024658" />
+     width="2.500001"
+     height="2.5000005"
+     x="94.5"
+     y="112.50001" />
 </svg>

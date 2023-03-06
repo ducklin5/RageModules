@@ -5,17 +5,17 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "program": "${env:RACK_SDK}/Rack.exe",
       "name": "Launch Release",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${env:RACK_SDK}/Rack.exe",
       "args": [],
       "stopAtEntry": false,
       "cwd": "${env:RACK_SDK}",
       "envFile": "${workspaceFolder}/config.env",
       "preLaunchTask": "Build application and add to Rack plugin folder",
       "externalConsole": false,
-      "console":"internalConsole",
+      "console": "internalConsole"
     },
     {
       "name": "Launch Debug",
@@ -29,13 +29,14 @@
       "MIMode": "gdb",
       "miDebuggerPath": "C:/msys64/mingw64/bin/gdb.exe",
       "preLaunchTask": "Build application without stripping symbols and add to Rack plugin folder",
-      "externalConsole": false,
+      "externalConsole": true,
+      "internalConsoleOptions": "openOnSessionStart",
       "setupCommands": [
-          {
-              "description": "Enable pretty-printing for gdb",
-              "text": "-enable-pretty-printing",
-              "ignoreFailures": true
-          }
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
       ]
     },
     {
@@ -50,15 +51,15 @@
       "MIMode": "gdb",
       "miDebuggerPath": "C:/msys64/mingw64/bin/gdb.exe",
       "preLaunchTask": "Build application without stripping symbols and add to Rack plugin folder",
-      "externalConsole": false,
+      "externalConsole": true,
+      "internalConsoleOptions": "openOnSessionStart",
       "setupCommands": [
-          {
-              "description": "Enable pretty-printing for gdb",
-              "text": "-enable-pretty-printing",
-              "ignoreFailures": true
-          }
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
       ]
-    }
+    },
   ]
 }
-

@@ -1,5 +1,5 @@
 {
-     "configurations": [
+    "configurations": [
         {
             "name": "Win32",
             "includePath": [
@@ -16,7 +16,8 @@
             "compilerPath": "C:\\msys64\\mingw64\\bin\\g++.exe",
             "cStandard": "c11",
             "cppStandard": "c++17",
-            "intelliSenseMode": "gcc-x64"
+            "intelliSenseMode": "gcc-x64",
+            "configurationProvider": "ms-vscode.makefile-tools"
         }
     ],
     "version": 4
