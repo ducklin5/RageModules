@@ -43,7 +43,7 @@ struct AudioSample {
     }
 
     void update_display_data() {
-        char* pathDup = strdup(this->file_display.c_str());
+        char* pathDup = strdup(this->file_path.c_str());
         std::string fileDescription = basename(pathDup);
         this->file_display = fileDescription.substr(0, fileDescription.size() - 4);
         this->file_display = file_display.substr(0, 20);
@@ -70,7 +70,7 @@ struct AudioSample {
 
     bool load_file(std::string& path) {
         // Try load waveform using babycat
-        
+
         babycat_WaveformArgs waveform_args = babycat_waveform_args_init_default();
         babycat_WaveformResult waveform_result = babycat_waveform_from_file(path.c_str(), waveform_args);
         if (waveform_result.error_num != 0) {
@@ -159,11 +159,11 @@ struct Reflux: Module {
         config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
     }
 
-    std::string get_last_directory()  {
+    std::string get_last_directory() {
         return this->directory_;
     };
 
-    bool load_file(std::string filepath)  {
+    bool load_file(std::string filepath) {
         const bool loaded = current_sample().load_file(filepath);
         if (loaded)
             directory_ = system::getDirectory(filepath);
@@ -178,61 +178,71 @@ struct Reflux: Module {
     void process(const ProcessArgs& args) override {}
 };
 
-typedef unsigned char uchar;
-struct RGBA {
-    const uchar R;
-    const uchar G;
-    const uchar B;
-    const uchar A;
-
-    RGBA(uchar r, uchar g, uchar b, uchar a = 0xff) : R(r), G(g), B(b), A(a) {};
-};
-
 struct RefluxSampleDisplay: TransparentWidget {
     Reflux* module;
     int frame = 0;
 
     RefluxSampleDisplay() {}
 
-    void drawZeroLine(const DrawArgs& args, RGBA color) {
-        nvgStrokeColor(args.vg, nvgRGBA(color.R, color.G, color.B, color.A));
+    void drawLine(const DrawArgs& args, NVGcolor color, rack::math::Vec start, rack::math::Vec stop) {
+        nvgStrokeColor(args.vg, color);
         {
             nvgBeginPath(args.vg);
-            nvgMoveTo(args.vg, 10, 210);
-            nvgLineTo(args.vg, 130, 210);
+            nvgMoveTo(args.vg, start.x, start.y);
+            nvgLineTo(args.vg, stop.x, stop.y);
             nvgClosePath(args.vg);
         }
         nvgStroke(args.vg);
     }
 
-    void drawMarkerLine(const DrawArgs& args, RGBA color, double pos_ratio) {
-        nvgStrokeColor(args.vg, nvgRGBA(color.R, color.G, color.B, color.A));
-        int xLine;
+    void drawRect(const DrawArgs& args, NVGcolor color, rack::math::Rect rect, bool fill = false) {
+        auto pos = rect.pos;
+        auto size = rect.size;
+        if (fill) {
+            nvgBeginPath(args.vg);
+            nvgFillColor(args.vg, color);
+            nvgRect(args.vg, rect.pos.x, rect.pos.y, rect.size.x, rect.size.y);
+            nvgFill(args.vg);
+            nvgClosePath(args.vg);
+        }
+        drawLine(args, color, pos, pos + size * Vec(1, 0));
+        drawLine(args, color, pos, pos + size * Vec(0, 1));
+        drawLine(args, color, pos + size * Vec(1, 0), pos + size * Vec(1, 1));
+        drawLine(args, color, pos + size * Vec(0, 1), pos + size * Vec(1, 1));
+    }
+
+    void drawHLine(const DrawArgs& args, NVGcolor color, Rect rect, double pos_ratio) {
+        int yLine = floor(pos_ratio * rect.size.y);
         nvgStrokeWidth(args.vg, 0.8);
-        {
-            nvgBeginPath(args.vg);
-            xLine = 7 + floor(pos_ratio * 235);
-            nvgMoveTo(args.vg, xLine, 21);
-            nvgLineTo(args.vg, xLine, 96);
-            nvgClosePath(args.vg);
-        }
-        nvgStroke(args.vg);
+        this->drawLine(args, color, rect.pos + Vec(0, yLine), rect.pos + Vec(rect.size.x, yLine));
     }
 
-    void drawSample(const DrawArgs& args, AudioSample& sample) {
+    void drawVLine(const DrawArgs& args, NVGcolor color, Rect rect, double pos_ratio) {
+        int xLine = floor(pos_ratio * rect.size.x);
+        nvgStrokeWidth(args.vg, 0.8);
+        this->drawLine(args, color, rect.pos + Vec(xLine, 0), rect.pos + Vec(xLine, rect.size.y));
+    }
+
+    void drawText(const DrawArgs& args, NVGcolor color, Rect rect, const char* text) {
+        nvgFontSize(args.vg, 8);
+        nvgTextLetterSpacing(args.vg, 0);
+        nvgFillColor(args.vg, color);
+        nvgTextBox(args.vg, rect.pos.x, rect.pos.y + rect.size.y, rect.size.x, text, NULL);
+    }
+
+    void drawSample(const DrawArgs& args, Rect rect, AudioSample& sample) {
         auto& display_buf = sample.display_buf;
         nvgStrokeColor(args.vg, nvgRGBA(0x22, 0x44, 0xc9, 0xc0));
         nvgSave(args.vg);
-        Rect b = Rect(Vec(10, 190), Vec(120, 40));
-        nvgScissor(args.vg, b.pos.x, b.pos.y, b.size.x, b.size.y);
+        nvgScissor(args.vg, rect.pos.x, rect.pos.y, rect.size.x, rect.size.y);
         nvgBeginPath(args.vg);
         for (unsigned int i = 0; i < display_buf.size(); i++) {
             float x, y;
             x = (float)i / (display_buf.size() - 1);
             y = display_buf[i] / 2.0 + 0.5;
             Vec p;
-            p.x = b.pos.x + b.size.x * x;
-            p.y = b.pos.y + b.size.y * (1.0 - y);
+            p.x = rect.pos.x + rect.size.x * x;
+            p.y = rect.pos.y + rect.size.y * (1.0 - y);
             if (i == 0)
                 nvgMoveTo(args.vg, p.x, p.y);
             else
@@ -247,40 +257,65 @@ struct RefluxSampleDisplay: TransparentWidget {
         nvgRestore(args.vg);
     }
 
+    struct SplitResult {
+        Rect A;
+        Rect B;
+    };
+
+    SplitResult splitRectH(const Rect rect, float h) {
+        return
+        SplitResult {A: Rect(rect.pos, Vec(rect.size.x, h)), B: Rect(rect.pos + Vec(0, h), rect.size - Vec(0, h))};
+    }
+
+    SplitResult splitRectV(const Rect rect, float w) {
+        return
+        SplitResult {A: Rect(rect.pos, Vec(w, rect.size.y)), B: Rect(rect.pos + Vec(w, 0), rect.size - Vec(w, 0))};
+    }
+
     void drawLayer(const DrawArgs& args, int layer) override {
+        const float titleHeight = 10;
+        const auto rectBorderColor = nvgRGB(0xff, 0xff, 0x00);
 
         if (module) {
-            AudioSample& currentSample = module->current_sample();
+            AudioSample& sample = module->current_sample();
             if (layer == 1) {
-                // std::shared_ptr<Font> font =
-                // APP->window->loadFont(asset::system("res/fonts/DSEG7ClassicMini-BoldItalic.ttf"));
-                nvgFontSize(args.vg, 10);
-                // nvgFontFaceId(args.vg, font->handle);
-                nvgTextLetterSpacing(args.vg, 0);
-                nvgFillColor(args.vg, nvgRGBA(0xdd, 0x33, 0x33, 0xff));
-                nvgTextBox(args.vg, 7, 16, 247, currentSample.file_display.c_str(), NULL);
-                nvgTextBox(args.vg, 167, 16, 97, currentSample.file_info_display.c_str(), NULL);
-                // nvgTextBox(args.vg, 9, 26,120, module->debugDisplay.c_str(), NULL);
-                // nvgTextBox(args.vg, 109, 26,120, module->debugDisplay2.c_str(), NULL);
+                Rect localBox = Rect(Vec(0), box.size);
+                Rect headerRect, bodyRect, fileNameRect, fileInfoRect;
+                {
+                    auto result = splitRectH(localBox, titleHeight);
+                    headerRect = result.A;
+                    bodyRect = result.B;
+                    result = splitRectV(headerRect, headerRect.size.x * 0.7);
+                    fileNameRect = result.A;
+                    fileInfoRect = result.B;
+                }
 
-                // Zero line
-                this->drawZeroLine(args, RGBA(0xff, 0xff, 0xff));
+                this->drawRect(args, nvgRGB(0, 0, 0), localBox, true);
+                this->drawRect(args, rectBorderColor, fileNameRect);
+                this->drawRect(args, rectBorderColor, fileInfoRect);
+                this->drawRect(args, rectBorderColor, bodyRect);
 
-                if (!currentSample.is_empty()) {
+                this->drawText(args, nvgRGB(0, 255, 0), fileNameRect, sample.file_display.c_str());
+                this->drawText(args, nvgRGB(0, 255, 0), fileInfoRect, sample.file_info_display.c_str());
+
+                // Zero Line
+                this->drawHLine(args, nvgRGB(255, 0, 0), bodyRect, 0.5);
+
+                if (!sample.is_empty()) {
                     // Write head line
-                    drawMarkerLine(args, RGBA(0xff, 0x00, 0x00), currentSample.write_head / currentSample.num_frames);
+                    drawVLine(args, nvgRGB(255, 0, 0), bodyRect, sample.write_head / sample.num_frames);
 
                     // Read head line
-                    drawMarkerLine(args, RGBA(0x00, 0xff, 0x00), currentSample.read_head / currentSample.num_frames);
+                    drawVLine(args, nvgRGB(0, 255, 0), bodyRect, sample.read_head / sample.num_frames);
 
                     // Start head line
-                    drawMarkerLine(args, RGBA(0x00, 0x00, 0xff), currentSample.start_head / currentSample.num_frames);
+                    drawVLine(args, nvgRGB(0, 0, 255), bodyRect, sample.start_head / sample.num_frames);
 
                     // Stop head line
-                    drawMarkerLine(args, RGBA(0x7f, 0x00, 0x7f), currentSample.stop_head / currentSample.num_frames);
+                    drawVLine(args, nvgRGB(127, 0, 127), bodyRect, sample.stop_head / sample.num_frames);
 
                     // Waveform
-                    drawSample(args, currentSample);
+                    drawSample(args, bodyRect, sample);
                 }
             }
         }
@@ -300,8 +335,8 @@ struct RefluxWidget: ModuleWidget {
 
         {
             RefluxSampleDisplay* display = new RefluxSampleDisplay();
-            display->box.pos = Vec(3, 24);
-            display->box.size = Vec(247, 100);
+            display->box.pos = Vec(15, 210);
+            display->box.size = Vec(150, 58);
             display->module = module;
             addChild(display);
         }
