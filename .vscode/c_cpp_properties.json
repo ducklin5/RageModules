@@ -5,7 +5,7 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "${RACK_SDK}/dep/**",
-                "${RACK_SDK}/include/**"
+                "${RACK_SDK}/include/"
             ],
             "defines": [
                 "_DEBUG",
