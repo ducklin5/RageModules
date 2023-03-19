@@ -37,7 +37,7 @@ struct Resolve : Module {
 		config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
 	}
 
-	float getInputPolyMaxVoltage(InputIds id) {
+	float get_input_poly_max_voltage(InputIds id) {
 		const int input_channels = inputs[id].getChannels();
 		const float* input_voltages = inputs[id].getVoltages();
 		const float input_max_voltage = *std::max_element(input_voltages, input_voltages+input_channels);
@@ -51,7 +51,7 @@ struct Resolve : Module {
 		int selected_channels[3] = {0, 0, 0};
 
 		for(int tid=0; tid<NUM_TRIGIN; tid++) {
-			const float trig_max_poly_voltage = this->getInputPolyMaxVoltage((InputIds)(tid*3));
+			const float trig_max_poly_voltage = this->get_input_poly_max_voltage((InputIds)(tid*3));
 			if ( trig_max_poly_voltage && (trig_max_poly_voltage >= max_trig_voltage)) {
 				max_trig_voltage = trig_max_poly_voltage;
 				selected = tid;

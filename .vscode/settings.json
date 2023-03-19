@@ -6,7 +6,7 @@
     },
     "Bash-MSYS2-mingw64": {
       "path": "C:/msys64/usr/bin/bash.exe",
-      "args": ["--login", ],
+      "args": ["--login"],
       "env": {
         "MSYSTEM": "MINGW64",
         "CHERE_INVOKING": "1"
@@ -19,8 +19,7 @@
         "MSYSTEM": "MINGW64",
         "CHERE_INVOKING": "1"
       }
-    },
-   
+    }
   },
 
   "terminal.integrated.defaultProfile.windows": "Bash-MSYS2-mingw64",
@@ -32,8 +31,54 @@
   "terminal.integrated.detectLocale": "off",
   "cmake.configureOnOpen": false,
   "files.associations": {
-    "string": "cpp"
+    "string": "cpp",
+    "tuple": "cpp",
+    "cmath": "cpp",
+    "algorithm": "cpp",
+    "iostream": "cpp",
+    "vector": "cpp",
+    "*.tcc": "cpp",
+    "compare": "cpp",
+    "iomanip": "cpp",
+    "regex": "cpp",
+    "*.def": "cpp",
+    "*.inc": "cpp",
+    "array": "cpp",
+    "bitset": "cpp",
+    "string_view": "cpp",
+    "initializer_list": "cpp",
+    "deque": "cpp",
+    "list": "cpp"
   },
-  // "terminal.integrated.windowsEnableConpty": true,
+  "C_Cpp.codeAnalysis.exclude": {},
 
+  "C_Cpp.codeAnalysis.clangTidy.enabled": true,
+  "C_Cpp.codeAnalysis.clangTidy.path": "C:\\msys64\\mingw64\\bin\\clang-tidy.exe",
+  //"C_Cpp.codeAnalysis.clangTidy.path": "C:\\Program Files\\LLVM\\bin\\clang-tidy.exe",
+  "C_Cpp.codeAnalysis.clangTidy.args": [
+    "--config-file=${workspaceFolder}\\.clang-tidy",
+    "--extra-arg=--target=x86_64-pc-windows-gnu",
+    //"--extra-arg-before=-fgnuc-version=12.2.0",
+    "--extra-arg=-std=c++11",
+    "--extra-arg=-Wsuggest-override",
+    "--extra-arg=-fPIC",
+    "--extra-arg=-MMD",
+    "--extra-arg=-MP",
+    "--extra-arg=-funsafe-math-optimizations",
+    "--extra-arg=-fno-omit-frame-pointer",
+    "--extra-arg=-Wno-unused-parameter",
+    "--extra-arg=-DARCH_X64",
+    "--extra-arg=-march=nehalem",
+    "--extra-arg=-DARCH_WIN",
+    "--extra-arg=-D_USE_MATH_DEFINES",
+    "--extra-arg=-municode",
+    "--extra-arg=-static-libstdc++",
+    "--extra-arg=-DNDEBUG",
+    "--extra-arg=-D__clang__"
+  ],
+  "C_Cpp.clang_format_path": "C:\\msys64\\mingw64\\bin\\clang-format.exe",
+
+  "C_Cpp.codeAnalysis.clangTidy.checks.disabled": [
+    "misc-static-assert",
+  ]
 }

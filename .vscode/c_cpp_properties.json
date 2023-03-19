@@ -4,8 +4,12 @@
             "name": "Win32",
             "includePath": [
                 "${workspaceFolder}/**",
+                "${workspaceFolder}/",
+                "${RACK_SDK}/dep/",
                 "${RACK_SDK}/dep/**",
-                "${RACK_SDK}/include/"
+                "${RACK_SDK}/dep/include/",
+                "${RACK_SDK}/include/",
+                "${RACK_SDK}/include/**"
             ],
             "defines": [
                 "_DEBUG",
@@ -13,11 +17,10 @@
                 "_UNICODE"
             ],
             "windowsSdkVersion": "10.0.18362.0",
-            "compilerPath": "C:\\msys64\\mingw64\\bin\\g++.exe",
+            "compilerPath": "C:\\msys64\\mingw64\\bin\\clang.exe",
             "cStandard": "c11",
-            "cppStandard": "c++17",
-            "intelliSenseMode": "gcc-x64",
-            "configurationProvider": "ms-vscode.makefile-tools"
+            "cppStandard": "c++11",
+            //"intelliSenseMode": "gcc-x64"
         }
     ],
     "version": 4
