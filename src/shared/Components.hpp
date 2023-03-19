@@ -43,7 +43,7 @@ struct RoundSmallGrayOmniKnob: app::SvgKnob {
     RoundSmallGrayOmniKnob() {
         minAngle = -0.75 * M_PI;
         maxAngle = 0.75 * M_PI;
-        speed = 0.3;
+        speed = 0.7;
         setSvg(APP->window->loadSvg(asset::plugin(pluginInstance, "res/Components/RoundSmallGrayOmniKnob.svg")));
     }
 

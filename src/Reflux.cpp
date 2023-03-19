@@ -33,15 +33,15 @@ struct AudioClip {
     IdxType num_frames = 0;
     IdxType num_channels = 0;
     IdxType frame_rate_hz = 0;
-    std::vector<std::vector<float>> raw_waveform;
+    std::vector<std::vector<double>> raw_waveform;
 
     std::string file_path;
     std::string file_display;
     std::string file_info_display;
     std::vector<double> display_buf;
 
-    bool is_loaded = false;
-    bool is_modified = false;
+    bool has_loaded = false;
+    bool has_recorded = false;
     bool is_playing = false;
     bool is_recording = false;
 
@@ -49,6 +49,8 @@ struct AudioClip {
     IdxType write_head = 0;
     IdxType start_head = 0;
     IdxType stop_head = 0;
+
+    rack::dsp::Timer write_timer;
 
     void load_babycat_waveform(babycat_Waveform* waveform) {
         const auto info = BabycatWaveformInfo(waveform);
@@ -109,8 +111,8 @@ struct AudioClip {
 
         this->stop_head = this->num_frames;
         this->file_path = path;
-        this->is_loaded = true;
-        this->is_modified = false;
+        this->has_loaded = true;
+        this->has_recorded = false;
         this->update_display_data();
         this->build_display_buf();
 
@@ -119,9 +121,9 @@ struct AudioClip {
 
     bool save_file(std::string& path) {
         SF_INFO info = {
-            frames: (int) this->num_frames,
-            samplerate: (int) this->frame_rate_hz,
-            channels: (int) this->num_channels,
+            frames: (int)this->num_frames,
+            samplerate: (int)this->frame_rate_hz,
+            channels: (int)this->num_channels,
             format: SF_FORMAT_WAV | SF_FORMAT_PCM_24,
             sections: 0,
             seekable: true,
@@ -163,7 +165,7 @@ struct AudioClip {
         return this->raw_waveform[channel_idx][frame_idx];
     }
 
-    bool set_sample(IdxType channel_idx, IdxType frame_idx, int value, bool overwrite = true) {
+    bool set_sample(IdxType channel_idx, IdxType frame_idx, double value, bool overwrite = true) {
         if (channel_idx >= this->num_channels) {
             this->num_channels = channel_idx + 1;
             this->raw_waveform.resize(this->num_channels);
@@ -184,19 +186,19 @@ struct AudioClip {
         return true;
     }
 
-    bool is_empty() {
-        return !this->is_loaded && !is_modified;
-    }
-
     bool has_data() {
-        return this->is_loaded || is_modified;
-    };
+        return has_loaded || has_recorded;
+    }
 
     void start_playing() {
         if (has_data()) {
             this->read_head = start_head;
             this->is_playing = true;
         }
+    }
+
+    void toggle_recording() {
+        this->is_recording = !this->is_recording;
     }
 
     std::vector<double> read_frame() {
@@ -217,12 +219,26 @@ struct AudioClip {
         return data;
     }
 
-    void write_frame(std::vector<double> channels, bool overwrite = true) {
+    struct WriteArgs {
+        bool overwrite;
+        float delta;
+        WriteArgs() : overwrite(true), delta(0.0) {}
+    };
+
+    void write_frame(const std::vector<double> channels, WriteArgs args = WriteArgs()) {
         for (IdxType cidx = 0; cidx < channels.size(); cidx++) {
-            set_sample(cidx, write_head, channels[cidx], overwrite);
+            set_sample(cidx, write_head, channels[cidx], args.overwrite);
+        }
+
+        this->has_recorded = true;
+
+        if (write_timer.process(args.delta) > rage::UI_update_time) {
+            write_timer.reset();
+            this->build_display_buf();
         }
 
         write_head++;
+        stop_head = write_head;
     }
 };
 
@@ -234,24 +250,25 @@ struct AudioSlice {
 
 struct Reflux: Module {
     enum ParamIds {
-        SELECTED_SAMPLE,
-        SELECTED_SLICE,
-        SAMPLE_START,
-        SAMPLE_STOP,
-        SAMPLE_WRITE,
-        SAMPLE_READ,
-        SAMPLE_RECORD,
-        SAMPLE_LOAD,
-        SAMPLE_SAVE,
-        SAMPLE_TRIG,
-        SAMPLE_AUTO_SLICE,
-        SAMPLE_MAKE_SLICE,
-        GLOBAL_DRY,
-        GLOBAL_TRIG_MODE,
-        GLOBAL_OVERWRITE,
-        GLOBAL_SLICES,
-        GLOBAL_SLICE_CV_MODE,
-        GLOBAL_SLICE_CV_ATNV,
+        PARAM_SELECTED_SAMPLE,
+        PARAM_SELECTED_SLICE,
+        PARAM_SAMPLE_START,
+        PARAM_SAMPLE_STOP,
+        PARAM_SAMPLE_WRITE,
+        PARAM_SAMPLE_READ,
+        PARAM_SAMPLE_RECORD,
+        PARAM_SAMPLE_LOAD,
+        PARAM_SAMPLE_SAVE,
+        PARAM_SAMPLE_PLAY,
+        PARAM_SAMPLE_AUTO_SLICE,
+        PARAM_SAMPLE_MAKE_SLICE,
+        PARAM_GLOBAL_DRY,
+        PARAM_GLOBAL_GATE_MODE,
+        PARAM_GLOBAL_OVERWRITE,
+        PARAM_GLOBAL_REC_MANY,
+        PARAM_GLOBAL_SLICES,
+        PARAM_GLOBAL_SLICE_CV_MODE,
+        PARAM_GLOBAL_SLICE_CV_ATNV,
         NUM_PARAMS
     };
 
@@ -270,18 +287,19 @@ struct Reflux: Module {
 
     enum OutputIds { OUTPUT_AUDIOL, OUTPUT_AUDIOR, OUTPUT_BOS, OUTPUT_EOS, NUM_OUTPUTS };
 
-    enum LightIds { NUM_LIGHTS };
+    enum LightIds { LIGHT_SAMPLE_RECORD, LIGHT_SAMPLE_PLAY, NUM_LIGHTS };
 
-    static const int NUM_SAMPLES = 8;
+    static const int NUM_SAMPLES = 12;
     int selected_sample = 0;
-    float prev_sample_trig_value = 0;
     AudioClip clips[NUM_SAMPLES];
     std::string directory_ = "";
 
+    rack::dsp::BooleanTrigger play_button_trigger, record_button_trigger, overwrite_button_trigger;
+    rack::dsp::Timer light_timer;
+
     Reflux() {
         config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
-        configSwitch(SELECTED_SAMPLE, 0.0, NUM_SAMPLES - 1, 0.0, "Selected Sample");
-        configParam(SAMPLE_START, -INFINITY, INFINITY, 0.0);
+        configSwitch(PARAM_SELECTED_SAMPLE, 0.0, NUM_SAMPLES - 1, 0.0, "Selected Sample");
     }
 
     std::string get_last_directory() {
@@ -317,16 +335,16 @@ struct Reflux: Module {
     void on_omni_knob_changed(int id, float delta) {
         IdxType* frame = nullptr;
         switch (id) {
-            case SAMPLE_START:
+            case PARAM_SAMPLE_START:
                 frame = &(current_sample().start_head);
                 break;
-            case SAMPLE_STOP:
+            case PARAM_SAMPLE_STOP:
                 frame = &(current_sample().stop_head);
                 break;
-            case SAMPLE_READ:
+            case PARAM_SAMPLE_READ:
                 frame = &(current_sample().read_head);
                 break;
-            case SAMPLE_WRITE:
+            case PARAM_SAMPLE_WRITE:
                 frame = &(current_sample().write_head);
                 break;
             default:
@@ -336,21 +354,7 @@ struct Reflux: Module {
         *frame = lerp_current_sample_frames(*frame, delta);
     }
 
-    void process(const ProcessArgs& args) override {
-        // update the select sample
-        selected_sample = getParam(SELECTED_SAMPLE).getValue();
-
-        // listen for sample trigger param event
-        if (getParam(SAMPLE_TRIG).getValue() > 0 && prev_sample_trig_value <= 0) {
-            current_sample().start_playing();
-        }
-        prev_sample_trig_value = getParam(SAMPLE_TRIG).getValue();
-
-        // listen for toggle recording param event
-
-        // read audio input to current sample
-
-        // write all playing clips to output
+    void process_play_clips() {
         int clips_playing = 0;
         double audio_out_l = 0;
         double audio_out_r = 0;
@@ -370,6 +374,47 @@ struct Reflux: Module {
 
         getOutput(OUTPUT_AUDIOL).setVoltage(audio_out_l);
         getOutput(OUTPUT_AUDIOR).setVoltage(audio_out_r);
+    }
+
+    void process(const ProcessArgs& args) override {
+        // update the select sample
+        selected_sample = getParam(PARAM_SELECTED_SAMPLE).getValue();
+
+        // listen for sample trigger param event
+        if (play_button_trigger.process(params[PARAM_SAMPLE_PLAY].getValue())) {
+            current_sample().start_playing();
+        }
+
+        // listen for toggle recording param event
+        if (record_button_trigger.process(params[PARAM_SAMPLE_RECORD].getValue())) {
+            current_sample().toggle_recording();
+        }
+
+        // update lights
+        if (light_timer.process(args.sampleTime) > rage::UI_update_time) {
+            light_timer.reset();
+            lights[LIGHT_SAMPLE_PLAY].setSmoothBrightness(current_sample().is_playing ? .5f : 0.0f, UI_update_time);
+            lights[LIGHT_SAMPLE_RECORD].setSmoothBrightness(current_sample().is_recording ? .5f : 0.0f, UI_update_time);
+        }
+
+        // read audio input to current sample
+        for (int i = 0; i < NUM_SAMPLES; i++) {
+            if (clips[i].is_recording) {
+                if (i == selected_sample) {
+                    auto data = std::vector<double>(2);
+                    data[0] = getInput(INPUT_AUDIOL).getVoltage();
+                    data[1] = getInput(INPUT_AUDIOR).getVoltage();
+                    AudioClip::WriteArgs wargs;
+                    wargs.delta = args.sampleTime;
+                    current_sample().write_frame(data, wargs);
+                } else {
+                    clips[i].is_recording = false;
+                }
+            }
+        }
+
+        // write all playing clips to output
+        process_play_clips();
     }
 };
 
@@ -500,7 +545,7 @@ struct RefluxSampleDisplay: TransparentWidget {
                 // Zero Line
                 this->draw_h_line(args, color_mint, waveform_rect, 0.5);
 
-                if (!sample.is_empty()) {
+                if (sample.has_data()) {
                     // Waveform
                     draw_sample(args, color_white, waveform_rect, sample);
 
@@ -546,11 +591,12 @@ struct RefluxWidget: ModuleWidget {
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
-        addParam(createParamCentered<RoundSmallGraySnapKnob>(Vec(30, 205), module, Reflux::SELECTED_SAMPLE));
-        addParam(createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(60, 205), module, Reflux::SAMPLE_START));
-        addParam(createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(90, 205), module, Reflux::SAMPLE_STOP));
-        addParam(createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(120, 205), module, Reflux::SAMPLE_WRITE));
-        addParam(createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(150, 205), module, Reflux::SAMPLE_READ));
+        addParam(createParamCentered<RoundSmallGraySnapKnob>(Vec(30, 205), module, Reflux::PARAM_SELECTED_SAMPLE));
+        addParam(createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(60, 205), module, Reflux::PARAM_SAMPLE_START));
+        addParam(createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(90, 205), module, Reflux::PARAM_SAMPLE_STOP));
+        addParam(
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(120, 205), module, Reflux::PARAM_SAMPLE_WRITE));
+        addParam(createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(150, 205), module, Reflux::PARAM_SAMPLE_READ));
 
         {
             RefluxSampleDisplay* display = new RefluxSampleDisplay();
@@ -560,12 +606,17 @@ struct RefluxWidget: ModuleWidget {
             addChild(display);
         }
 
-        addParam(createParamCentered<RubberSmallButton>(Vec(185, 205), module, Reflux::SAMPLE_RECORD));
-        addParam(createParamCentered<LoadButton<Reflux>>(Vec(220, 205), module, Reflux::SAMPLE_LOAD));
-        addParam(createParamCentered<SaveButton<Reflux>>(Vec(255, 205), module, Reflux::SAMPLE_SAVE));
-        addParam(createParamCentered<RubberSmallButton>(Vec(185, 245), module, Reflux::SAMPLE_TRIG));
-        addParam(createParamCentered<RubberSmallButton>(Vec(220, 245), module, Reflux::SAMPLE_AUTO_SLICE));
-        addParam(createParamCentered<RubberSmallButton>(Vec(255, 245), module, Reflux::SAMPLE_MAKE_SLICE));
+        addParam(createParamCentered<RubberSmallButton>(Vec(185, 205), module, Reflux::PARAM_SAMPLE_RECORD));
+        addParam(createParamCentered<LoadButton<Reflux>>(Vec(220, 205), module, Reflux::PARAM_SAMPLE_LOAD));
+        addParam(createParamCentered<SaveButton<Reflux>>(Vec(255, 205), module, Reflux::PARAM_SAMPLE_SAVE));
+        addParam(createParamCentered<RubberSmallButton>(Vec(185, 245), module, Reflux::PARAM_SAMPLE_PLAY));
+        addParam(createParamCentered<RubberSmallButton>(Vec(220, 245), module, Reflux::PARAM_SAMPLE_AUTO_SLICE));
+        addParam(createParamCentered<RubberSmallButton>(Vec(255, 245), module, Reflux::PARAM_SAMPLE_MAKE_SLICE));
+
+        addChild(
+            createLightCentered<RubberSmallButtonLed<RedLight>>(Vec(185, 205), module, Reflux::LIGHT_SAMPLE_RECORD));
+        addChild(
+            createLightCentered<RubberSmallButtonLed<BlueLight>>(Vec(185, 245), module, Reflux::LIGHT_SAMPLE_PLAY));
 
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0, 101.0)), module, Reflux::INPUT_AUDIOL));
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(20.0, 101.0)), module, Reflux::INPUT_AUDIOR));

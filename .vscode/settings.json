@@ -30,26 +30,6 @@
   "terminal.integrated.allowChords": true,
   "terminal.integrated.detectLocale": "off",
   "cmake.configureOnOpen": false,
-  "files.associations": {
-    "string": "cpp",
-    "tuple": "cpp",
-    "cmath": "cpp",
-    "algorithm": "cpp",
-    "iostream": "cpp",
-    "vector": "cpp",
-    "*.tcc": "cpp",
-    "compare": "cpp",
-    "iomanip": "cpp",
-    "regex": "cpp",
-    "*.def": "cpp",
-    "*.inc": "cpp",
-    "array": "cpp",
-    "bitset": "cpp",
-    "string_view": "cpp",
-    "initializer_list": "cpp",
-    "deque": "cpp",
-    "list": "cpp"
-  },
   "C_Cpp.codeAnalysis.exclude": {},
 
   "C_Cpp.codeAnalysis.clangTidy.enabled": true,
@@ -74,7 +54,7 @@
     "--extra-arg=-municode",
     "--extra-arg=-static-libstdc++",
     "--extra-arg=-DNDEBUG",
-    "--extra-arg=-D__clang__"
+    "--extra-arg=-Wconversion"
   ],
   "C_Cpp.clang_format_path": "C:\\msys64\\mingw64\\bin\\clang-format.exe",
 
