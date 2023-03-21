@@ -61,6 +61,7 @@ KeepEmptyLinesAtTheStartOfBlocks: false
 MaxEmptyLinesToKeep: 1
 NamespaceIndentation: Inner
 PointerAlignment: Left
+QualifierAlignment: Left 
 ReflowComments: false
 SortIncludes: true
 SortUsingDeclarations: true

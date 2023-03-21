@@ -17,7 +17,7 @@ TODO: Replace placeholder
 */
 
 namespace rage {
-const float UI_update_time = 1.f / 60.f;
+const float UI_update_time = 1.f / 15.f;
 
 struct RoundGrayKnob: app::SvgKnob {
     RoundGrayKnob() {
@@ -119,7 +119,7 @@ struct LoadButton: RubberSmallButton {
             std::string filename;
 
             if (dir == "") {
-                dir = asset::user("");
+                dir = asset::user("./Music/");
                 filename = "Untitled";
             } else {
                 filename = system::getFilename("Untitled");
@@ -144,22 +144,24 @@ struct SaveButton: RubberSmallButton {
         ParamQuantity* paramQuantity = getParamQuantity();
         ModuleType* module = static_cast<ModuleType*>(paramQuantity->module);
         if (module) {
-            std::string dir = module->get_last_directory();
-            std::string filename;
+            if (module->can_save()) {
+                std::string dir = module->get_last_directory();
+                std::string filename;
 
-            if (dir == "") {
-                dir = asset::user("./Music/");
-                filename = "Untitled";
-            } else {
-                filename = system::getFilename("Untitled");
-            }
+                if (dir == "") {
+                    dir = asset::user("./Music/");
+                    filename = "Untitled";
+                } else {
+                    filename = system::getFilename("Untitled");
+                }
 
-            char* path = osdialog_file(OSDIALOG_SAVE, dir.c_str(), filename.c_str(), NULL);
-            std::cout << "Os Dialog selected: " << path << "\n";
+                char* path = osdialog_file(OSDIALOG_SAVE, dir.c_str(), filename.c_str(), NULL);
+                std::cout << "Os Dialog selected: " << path << "\n";
 
-            if (path) {
-                module->save_file(std::string(path));
-                free(path);
+                if (path) {
+                    module->save_file(std::string(path));
+                    free(path);
+                }
             }
         }
 

@@ -5,7 +5,7 @@ RACK_DIR ?= ../..
 # FLAGS will be passed to both the C and C++ compiler
 FLAGS += -O0 
 CFLAGS += -O0
-CXXFLAGS += -O0 -std=c++17
+CXXFLAGS += -O0 
 BABYCAT_TARGET_DIR ?= dep/babycat/target/release
 
 # Careful about linking to shared libraries, since you can't assume much about the user's environment and library search path.

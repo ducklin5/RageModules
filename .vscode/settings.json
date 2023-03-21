@@ -53,12 +53,20 @@
     "--extra-arg=-D_USE_MATH_DEFINES",
     "--extra-arg=-municode",
     "--extra-arg=-static-libstdc++",
+    "--extra-arg=-libstdc++",
     "--extra-arg=-DNDEBUG",
-    "--extra-arg=-Wconversion"
+    "--extra-arg=-Wconversion",
   ],
   "C_Cpp.clang_format_path": "C:\\msys64\\mingw64\\bin\\clang-format.exe",
 
   "C_Cpp.codeAnalysis.clangTidy.checks.disabled": [
     "misc-static-assert",
-  ]
+  ],
+  "files.associations": {
+    "new": "cpp",
+    "regex": "cpp",
+    "*.inc": "cpp",
+    "*.def": "cpp",
+    "array": "cpp"
+  }
 }
