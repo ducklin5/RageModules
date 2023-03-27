@@ -36,7 +36,7 @@ struct RoundSmallGraySnapKnob: app::SvgKnob {
     }
 };
 
-template<class ModuleType>
+template<class ParentModule>
 struct RoundSmallGrayOmniKnob: app::SvgKnob {
     float previousValue = 0;
 
@@ -58,7 +58,7 @@ struct RoundSmallGrayOmniKnob: app::SvgKnob {
     void onChange(const ChangeEvent& e) override {
         SvgKnob::onChange(e);
         ParamQuantity* paramQuantity = getParamQuantity();
-        ModuleType* module = static_cast<ModuleType*>(paramQuantity->module);
+        ParentModule* module = static_cast<ParentModule*>(paramQuantity->module);
         const int id = paramQuantity->paramId;
         const float value = paramQuantity->getValue();
         const float delta = value - previousValue;
@@ -109,11 +109,11 @@ struct RubberSmallButtonLed: BASE {
     }
 };
 
-template<class ModuleType>
+template<class ParentModule>
 struct LoadButton: RubberSmallButton {
     void onDragEnd(const event::DragEnd& e) override {
         ParamQuantity* paramQuantity = getParamQuantity();
-        ModuleType* module = static_cast<ModuleType*>(paramQuantity->module);
+        ParentModule* module = static_cast<ParentModule*>(paramQuantity->module);
         if (module) {
             std::string dir = module->get_last_directory();
             std::string filename;
@@ -138,11 +138,11 @@ struct LoadButton: RubberSmallButton {
     }
 };
 
-template<class ModuleType>
+template<class ParentModule>
 struct SaveButton: RubberSmallButton {
     void onDragEnd(const event::DragEnd& e) override {
         ParamQuantity* paramQuantity = getParamQuantity();
-        ModuleType* module = static_cast<ModuleType*>(paramQuantity->module);
+        ParentModule* module = static_cast<ParentModule*>(paramQuantity->module);
         if (module) {
             if (module->can_save()) {
                 std::string dir = module->get_last_directory();
@@ -169,4 +169,28 @@ struct SaveButton: RubberSmallButton {
     }
 };
 
+enum WidgetType {
+    WTRegularButton,
+    WTLoadButton,
+    WTSaveButton,
+    WTSnapKnob,
+    WTOmniKnob,
+};
+
+template<class ParentModule>
+ParamWidget* create_centered_widget(const WidgetType wtype, Vec pos, Module* module, int param_id) {
+    switch (wtype) {
+        case WTRegularButton:
+            return createParamCentered<RubberSmallButton>(pos, module, param_id);
+        case WTLoadButton:
+            return createParamCentered<LoadButton<ParentModule>>(pos, module, param_id);
+        case WTSaveButton:
+            return createParamCentered<SaveButton<ParentModule>>(pos, module, param_id);
+        case WTSnapKnob:
+            return createParamCentered<RoundSmallGraySnapKnob>(pos, module, param_id);
+        case WTOmniKnob:
+            return createParamCentered<RoundSmallGrayOmniKnob<ParentModule>>(pos, module, param_id);
+    }
+    return nullptr;
+}
 }  // namespace rage

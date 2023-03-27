@@ -4,18 +4,63 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "../dep/babycat/babycat.h"
-#include "./shared/Components.hpp"
+#include "./shared/components.hpp"
+#include "./shared/nvg_helpers.hpp"
+#include "./shared/optional.hpp"
 #include "plugin.hpp"
 
 enum { AUDIO_SAMPLE_DISPLAY_RES = 256 };
+enum { AUDIO_SAMPLE_DISPLAY_CHANNELS = 2 };
 
 // NOLINTNEXTLINE (google-build-using-namespace)
 using namespace rage;
 using IdxType = uintptr_t;
+using DisplayBufferType = std::array<std::vector<double>, 2>;
+
+struct Marker {
+    float pos;
+    std::string tag;
+
+    bool operator<(const Marker& other) const {
+        return pos < other.pos;
+    }
+};
+
+class Stamp {
+  public:
+    const IdxType id;
+    Marker marker;
+
+    Stamp(float pos, std::string tag) : id(take_next_id()), marker({pos, tag}) {}
+
+    bool operator<(const Stamp& other) const {
+        return marker < other.marker;
+    }
+
+  private:
+    static IdxType next_id;
+
+    static IdxType take_next_id() {
+        return ++next_id;
+    }
+};
+
+IdxType Stamp::next_id = 0;
+
+struct Region {
+    float begin;
+    float end;
+    std::string tag;
+
+    Region(float begin, float end, const std::string& tag = "region") : begin(begin), end(end), tag(tag) {}
+};
 
 struct BabycatWaveformInfo {
     IdxType num_frames;
@@ -31,29 +76,33 @@ struct BabycatWaveformInfo {
 };
 
 struct AudioClip {
+    int id = 0;
     IdxType num_frames = 0;
     IdxType num_channels = 0;
     IdxType frame_rate_hz = 0;
     std::vector<std::vector<double>> raw_data;
 
-    std::string file_path = "Untitled.***";
+    std::string file_path;
     std::string file_display;
     std::string file_info_display;
-    std::vector<double> display_buf;
+    DisplayBufferType display_buf;
 
     bool has_loaded = false;
     bool has_recorded = false;
     bool is_playing = false;
     bool is_recording = false;
 
-    IdxType read_head = 0 ;
+    IdxType read_head = 0;
     IdxType write_head = 1;
     IdxType start_head = 0;
     IdxType stop_head = 0;
 
+    std::vector<std::reference_wrapper<const Stamp>> stamps = {};
+
     rack::dsp::Timer write_timer;
 
-    AudioClip() {
+    AudioClip() : file_path("Untitled.***"), file_display(""), file_info_display("") {
+        this->display_buf.fill({});
         this->update_display_data();
     }
 
@@ -97,26 +146,26 @@ struct AudioClip {
         std::string const file_description = basename(path_dup);
         this->file_display = file_description.substr(0, file_description.size() - 4);
         this->file_display = file_display.substr(0, 20);
-        this->file_info_display = std::to_string(this->frame_rate_hz) + "Hz-" + std::to_string(this->num_channels) + "Ch";
+        this->file_info_display =
+            std::to_string(this->frame_rate_hz) + "Hz-" + std::to_string(this->num_channels) + "Ch";
         free(path_dup);
     }
 
     void build_display_buf() {
-        display_buf.resize(AUDIO_SAMPLE_DISPLAY_RES, 0.0);
-        const IdxType chunk_size = this->num_frames / AUDIO_SAMPLE_DISPLAY_RES;
-        IdxType pos = 0;
-        double max = 0;
-        for (IdxType i = 0; i < AUDIO_SAMPLE_DISPLAY_RES; i++) {
-            double accum = 0.0;
-            for (IdxType j = 0; j < chunk_size; j++) {
-                accum += std::abs(get_sample(0, pos++));
+        for (int cidx = 0; cidx < AUDIO_SAMPLE_DISPLAY_CHANNELS; cidx++) {
+            display_buf[cidx].resize(AUDIO_SAMPLE_DISPLAY_RES, 0.0);
+            const IdxType chunk_size = this->num_frames / AUDIO_SAMPLE_DISPLAY_RES;
+            IdxType pos = 0;
+            double max = 0;
+            for (IdxType i = 0; i < AUDIO_SAMPLE_DISPLAY_RES; i++) {
+                double accum = 0.0;
+                for (IdxType j = 0; j < chunk_size; j++) {
+                    accum += std::abs(get_sample(cidx, pos++));
+                }
+                display_buf[cidx][i] = accum / ((double)chunk_size);
+                max = std::max(display_buf[cidx][i], max);
             }
-            display_buf[i] = accum / ((double)chunk_size);
-            max = std::max(display_buf[i], max);
         }
-        //for (int i = 0; i < AUDIO_SAMPLE_DISPLAY_RES; i++) {
-        //    display_buf[i] /= max;
-        //}
     }
 
     auto load_file(std::string& path) -> bool {
@@ -167,11 +216,11 @@ struct AudioClip {
             std::cerr << "Failed to write samples to output file" << std::endl;
             result = false;
         }
-        
+
         // Close the output file.
         sf_close(file);
 
-        if(result) {
+        if (result) {
             this->file_path = path;
             this->update_display_data();
         }
@@ -251,9 +300,9 @@ struct AudioClip {
     }
 
     struct WriteArgs {
-        bool overwrite { true };
-        float delta { 0.0};
-        WriteArgs(){} // NOLINT
+        bool overwrite {true};
+        float delta {0.0};
+        WriteArgs() {}  // NOLINT
     };
 
     void write_frame(const std::vector<double>& channels, WriteArgs args = {}) {
@@ -288,28 +337,164 @@ struct AudioClip {
         read_head = std::min(stop_head, read_head);
         //write_head = std::max(start_head, write_head);
     }
+
+    const DisplayBufferType& get_display_buf() const {
+        return display_buf;
+    }
+
+    std::vector<Marker> get_markers() const {
+        auto start_ratio = float(start_head) / num_frames;
+        auto stop_ratio = float(stop_head) / num_frames;
+        auto read_ratio = float(read_head) / num_frames;
+        auto write_ratio = float(write_head) / num_frames;
+        return {
+            Marker {start_ratio, "start"},
+            Marker {stop_ratio, "stop"},
+            Marker {read_ratio, "read"},
+            Marker {write_ratio, "write"},
+        };
+    }
+
+    std::vector<Region> get_regions() const {
+        auto start_ratio = float(start_head) / num_frames;
+        auto stop_ratio = float(stop_head) / num_frames;
+
+        return {
+            Region {0.0F, start_ratio},
+            Region {stop_ratio, 1.0F},
+        };
+    }
+
+    auto get_text_title() const -> std::string {
+        return "";
+    }
+
+    auto get_text_info() const -> std::string {
+        return "";
+    }
+
+    void add_stamp(const Stamp& stamp) {
+        stamps.push_back(stamp);
+        sort_stamps();
+    }
+
+    using StampRefType = const std::reference_wrapper<const Stamp>&;
+
+    void sort_stamps() {
+        std::sort(stamps.begin(), stamps.end(), [](StampRefType stamp1, StampRefType stamp2) {
+            return stamp1.get() < stamp2.get();
+        });
+    }
+
+    auto find_stamp(const Stamp& stamp) const -> int {
+        auto iter = std::find_if(stamps.begin(), stamps.end(), [&](StampRefType stamp_ref) {
+            return stamp_ref.get().id == stamp.id;
+        });
+        if (iter == stamps.end()) {
+            return -1;
+        }
+        return std::distance(stamps.begin(), iter);
+    }
+
+    void remove_stamp(const Stamp& stamp) {
+        const int idx = find_stamp(stamp);
+        if (idx >= 0) {
+            stamps.erase(stamps.begin() + idx);
+        }
+    }
 };
 
 struct AudioSlice {
-    int clip_index;
-    int start;
-    int stop;
+  private:
+    AudioClip& m_clip;
+    int m_start = 0;
+    int m_stop = 0;
+    int m_slice_id = 0;
+    Stamp m_stamp;
+    DisplayBufferType display_buf;
+
+  public:
+    AudioSlice(AudioClip& clip, int start = 0, int stop = 0) :
+        m_clip(clip),
+        m_start(start),
+        m_stop(stop),
+        m_stamp(Stamp(0, "")) {
+        update_stamp();
+        m_clip.add_stamp(m_stamp);
+    }
+
+    void update_stamp() {
+        m_stamp.marker.pos = (float)m_start / m_clip.num_frames;
+        m_stamp.marker.tag = "start";
+    }
+
+    bool has_data() const {
+        return true;
+    }
+
+    auto get_text_title() const -> std::string {
+        int clip_slice_index = m_clip.find_stamp(m_stamp);
+        return "clip-" + std::to_string(m_clip.id) + "-slice-" + std::to_string(clip_slice_index);
+    }
+
+    auto get_text_info() const -> std::string {
+        return std::to_string(m_slice_id);
+    }
+
+    std::vector<Marker> get_markers() const {
+        return {};
+    }
+
+    std::vector<Region> get_regions() const {
+        return {};
+    }
+
+    const DisplayBufferType& get_display_buf() const {
+        return display_buf;
+    }
+
+    ~AudioSlice() {
+        m_clip.remove_stamp(m_stamp);
+    }
 };
 
 struct Reflux: Module {
     enum ParamIds {
+        // Slice Knobs
+        PARAM_SELECTED_SLICE,
+        PARAM_SLICE_START,
+        PARAM_SLICE_ATTACK,
+        PARAM_SLICE_RELEASE,
+        PARAM_SLICE_STOP,
+
+        // Slice Buttons 1
+        PARAM_SLICE_PLAY,
+        PARAM_SLICE_PAUSE,
+        PARAM_SLICE_DELETE,
+
+        // Slice Buttons 2
+        PARAM_SLICE_SHIFT_L,
+        PARAM_SLICE_SHIFT_R,
+        PARAM_SLICE_LEARN_MIDI,
+
+        // Sample Knobs
         PARAM_SELECTED_SAMPLE,
         PARAM_SAMPLE_START,
         PARAM_SAMPLE_READ,
         PARAM_SAMPLE_WRITE,
         PARAM_SAMPLE_STOP,
+
+        // Sample Buttons 1
         PARAM_SAMPLE_RECORD,
         PARAM_SAMPLE_STOP_REC_SAVE,
         PARAM_SAMPLE_LOAD,
+
+        // Sample Buttons 2
         PARAM_SAMPLE_PLAY,
         PARAM_SAMPLE_PAUSE_MAKE_SLICE,
         PARAM_SAMPLE_AUTO_SLICE,
-        PARAM_SELECTED_SLICE,
+
+        // Global 1
         PARAM_GLOBAL_DRY,
         PARAM_GLOBAL_GATE_MODE,
         PARAM_GLOBAL_OVERWRITE,
@@ -338,8 +523,10 @@ struct Reflux: Module {
     enum LightIds { LIGHT_SAMPLE_RECORD, LIGHT_SAMPLE_PLAY, NUM_LIGHTS };
 
     static const int NUM_CLIPS = 12;
-    int selected_sample = 0;
-    std::array<AudioClip, NUM_CLIPS> clips { };
+    IdxType selected_sample = 0;
+    IdxType selected_slice = 0;
+    std::array<AudioClip, NUM_CLIPS> clips;
+    std::vector<AudioSlice> slices {};
     std::string directory_;
 
     rack::dsp::BooleanTrigger record_button_trigger, play_button_trigger, pause_button_trigger;
@@ -352,8 +539,20 @@ struct Reflux: Module {
         configSwitch(PARAM_SELECTED_SAMPLE, 0.0, NUM_CLIPS - 1, 0.0, "Selected Sample");
     }
 
-    auto current_sample() -> AudioClip& {
+    auto current_clip() -> AudioClip& {
         return clips.at(selected_sample);
+    }
+
+    auto current_slice() -> AudioSlice* {
+        if (slices.size() > selected_slice) {
+            return &slices.at(selected_slice);
+        }
+        return nullptr;
+    }
+
+    template<class T>
+    T* get_current_waveform() {
+        static_assert(sizeof(T) == -1, "Unsupported property type");
     }
 
     auto get_last_directory() const -> std::string {
@@ -361,23 +560,23 @@ struct Reflux: Module {
     }
 
     auto load_file(std::string filepath) -> bool {
-        const bool loaded = current_sample().load_file(filepath);
+        const bool loaded = current_clip().load_file(filepath);
         if (loaded) {
             directory_ = system::getDirectory(filepath);
         }
         return loaded;
     }
-    
+
     auto can_save() -> bool {
-        if(current_sample().is_recording) {
-            current_sample().toggle_recording();
+        if (current_clip().is_recording) {
+            current_clip().toggle_recording();
             return false;
         }
         return true;
     }
 
     auto save_file(std::string filepath) -> bool {
-        const bool saved = current_sample().save_file(filepath);
+        const bool saved = current_clip().save_file(filepath);
         if (saved) {
             directory_ = system::getDirectory(filepath);
         }
@@ -386,7 +585,7 @@ struct Reflux: Module {
 
     //returns the target frame given
     auto lerp_current_sample_frames(IdxType current_frame, float delta) -> IdxType {
-        const auto num_frames = current_sample().num_frames + 1;
+        const auto num_frames = current_clip().num_frames + 1;
         float ratio = ((float)current_frame) / ((float)num_frames);
         ratio = clamp(ratio + delta, 0.0, 1.0);
         return (IdxType)(ratio * num_frames);
@@ -396,27 +595,27 @@ struct Reflux: Module {
         IdxType* frame = nullptr;
         switch (param_id) {
             case PARAM_SAMPLE_START:
-                frame = &(current_sample().start_head);
+                frame = &(current_clip().start_head);
                 break;
             case PARAM_SAMPLE_STOP:
-                frame = &(current_sample().stop_head);
+                frame = &(current_clip().stop_head);
                 break;
             case PARAM_SAMPLE_READ:
-                frame = &(current_sample().read_head);
+                frame = &(current_clip().read_head);
                 break;
             case PARAM_SAMPLE_WRITE:
-                frame = &(current_sample().write_head);
+                frame = &(current_clip().write_head);
                 break;
             default:
                 return;
         }
 
         *frame = lerp_current_sample_frames(*frame, delta);
-        current_sample().fix_heads();
+        current_clip().fix_heads();
     }
 
     void process_read_input_audio(const ProcessArgs& args) {
-        for (int i = 0; i < NUM_CLIPS; i++) {
+        for (IdxType i = 0; i < NUM_CLIPS; i++) {
             if (clips.at(i).is_recording) {
                 if (i == selected_sample) {
                     auto data = std::vector<double>(2);
@@ -424,10 +623,9 @@ struct Reflux: Module {
                     data[1] = getInput(INPUT_AUDIOR).getVoltage();
                     AudioClip::WriteArgs wargs;
                     wargs.delta = args.sampleTime;
-                    current_sample().write_frame(data, wargs);
+                    current_clip().write_frame(data, wargs);
                 } else {
                     clips.at(i).is_recording = false;
-
                 }
             }
         }
@@ -461,18 +659,18 @@ struct Reflux: Module {
 
         // listen for start recording button event
         if (record_button_trigger.process(params[PARAM_SAMPLE_RECORD].getValue() > 0.0)) {
-            current_sample().toggle_recording();
+            current_clip().toggle_recording();
         }
 
         // listen for sample play button event
         if (play_button_trigger.process(params[PARAM_SAMPLE_PLAY].getValue() > 0.0)) {
-            current_sample().start_playing();
+            current_clip().start_playing();
         }
 
         // listen for sample pause button event
         if (pause_button_trigger.process(params[PARAM_SAMPLE_PAUSE_MAKE_SLICE].getValue() > 0.0)) {
-            if (current_sample().is_playing) {
-                current_sample().toggle_playing();
+            if (current_clip().is_playing) {
+                current_clip().toggle_playing();
             } else {
                 // make slice
             }
@@ -481,8 +679,8 @@ struct Reflux: Module {
         // update lights
         if (light_timer.process(args.sampleTime) > rage::UI_update_time) {
             light_timer.reset();
-            lights[LIGHT_SAMPLE_PLAY].setSmoothBrightness(current_sample().is_playing ? .5f : 0.0f, UI_update_time);
-            lights[LIGHT_SAMPLE_RECORD].setSmoothBrightness(current_sample().is_recording ? .5f : 0.0f, UI_update_time);
+            lights[LIGHT_SAMPLE_PLAY].setSmoothBrightness(current_clip().is_playing ? .5f : 0.0f, UI_update_time);
+            lights[LIGHT_SAMPLE_RECORD].setSmoothBrightness(current_clip().is_recording ? .5f : 0.0f, UI_update_time);
         }
 
         // read audio input to current sample
@@ -493,67 +691,45 @@ struct Reflux: Module {
     }
 };
 
-struct RefluxSampleDisplay: TransparentWidget {
+template<>
+AudioClip* Reflux::get_current_waveform<AudioClip>() {
+    return &current_clip();
+}
+
+template<>
+AudioSlice* Reflux::get_current_waveform<AudioSlice>() {
+    return current_slice();
+}
+
+using ColorSchemeMap = std::map<std::string, NVGcolor>;
+
+const ColorSchemeMap default_colors = {
+    {"start", nvgRGB(255, 170, 0)},
+    {"stop", nvgRGB(155, 77, 202)},
+    {"read", nvgRGB(30, 144, 255)},
+    {"write", nvgRGB(230, 0, 115)},
+    {"region", nvgRGB(56, 189, 153)}};
+
+template<class WaveformType>
+struct WaveformDisplayWidget: TransparentWidget {
     Reflux* module {nullptr};
+    const WaveformType* waveform;
+    const ColorSchemeMap& colorscheme;
 
-    RefluxSampleDisplay() = default;
+    WaveformDisplayWidget(const ColorSchemeMap& colorscheme = default_colors) :
+        TransparentWidget(),
+        colorscheme(colorscheme) {}
 
-    static void draw_line(const DrawArgs& args, NVGcolor color, rack::math::Vec start, rack::math::Vec stop) {
-        nvgStrokeColor(args.vg, color);
-        {
-            nvgBeginPath(args.vg);
-            nvgMoveTo(args.vg, start.x, start.y);
-            nvgLineTo(args.vg, stop.x, stop.y);
-            nvgClosePath(args.vg);
-        }
-        nvgStroke(args.vg);
-    }
-
-    static void draw_rect(const DrawArgs& args, NVGcolor color, rack::math::Rect rect, bool fill = false) {
-        auto pos = rect.pos;
-        auto size = rect.size;
-        if (fill) {
-            nvgBeginPath(args.vg);
-            nvgFillColor(args.vg, color);
-            nvgRect(args.vg, rect.pos.x, rect.pos.y, rect.size.x, rect.size.y);
-            nvgFill(args.vg);
-            nvgClosePath(args.vg);
-        }
-        draw_line(args, color, pos, pos + size * Vec(1, 0));
-        draw_line(args, color, pos, pos + size * Vec(0, 1));
-        draw_line(args, color, pos + size * Vec(1, 0), pos + size * Vec(1, 1));
-        draw_line(args, color, pos + size * Vec(0, 1), pos + size * Vec(1, 1));
-    }
-
-    static void draw_h_line(const DrawArgs& args, NVGcolor color, Rect rect, double pos_ratio) {
-        const int y_line = floor(pos_ratio * rect.size.y);
-        nvgStrokeWidth(args.vg, 0.8);
-        draw_line(args, color, rect.pos + Vec(0, y_line), rect.pos + Vec(rect.size.x, y_line));
-    }
-
-    static void draw_v_line(const DrawArgs& args, NVGcolor color, Rect rect, double pos_ratio) {
-        const int x_line = floor(pos_ratio * rect.size.x);
-        nvgStrokeWidth(args.vg, 0.8);
-        draw_line(args, color, rect.pos + Vec(x_line, 0), rect.pos + Vec(x_line, rect.size.y));
-    }
-
-    static void draw_text(const DrawArgs& args, NVGcolor color, Rect rect, const char* text) {
-        nvgFontSize(args.vg, 8);
-        nvgTextLetterSpacing(args.vg, 0);
-        nvgFillColor(args.vg, color);
-        nvgTextBox(args.vg, rect.pos.x + 2, rect.pos.y + rect.size.y - 2, rect.size.x, text, NULL);
-    }
-
-    static void draw_sample(const DrawArgs& args, NVGcolor color, Rect rect, AudioClip& sample) {
-        auto& display_buf = sample.display_buf;
-        const auto samples = display_buf.size();
-        if(samples <= 0) {
+    void draw_waveform(const DrawArgs& args, NVGcolor color, Rect rect) {
+        const auto& display_buf = waveform->get_display_buf();
+        const auto samples = display_buf[0].size();
+        if (samples <= 0) {
             return;
         }
 
         const auto rect_center = rect.getCenter();
-        auto fillColor = color;
-        fillColor.a -= 0.2;
+        auto fill_color = color;
+        fill_color.a -= 0.2;
 
         nvgSave(args.vg);
         nvgScissor(args.vg, rect.pos.x, rect.pos.y, rect.size.x, rect.size.y);
@@ -562,17 +738,17 @@ struct RefluxSampleDisplay: TransparentWidget {
 
         for (unsigned int i = 0; i < samples; i++) {
             const float spx = rect.pos.x + rect.size.x * ((float)i / ((float)samples - 1));
-            const float spy = rect_center.y + (rect.size.y / 2) * ((float)display_buf[i]);
+            const float spy = rect_center.y + (rect.size.y / 2) * ((float)display_buf[0][i]);
             nvgLineTo(args.vg, spx, spy);
         }
         for (unsigned int i = samples - 1; i > 0; i--) {
             const float spx = rect.pos.x + rect.size.x * ((float)i / ((float)samples - 1));
-            const float spy = rect_center.y - (rect.size.y / 2) * ((float)display_buf[i]);
+            const float spy = rect_center.y - (rect.size.y / 2) * ((float)display_buf[1][i]);
             nvgLineTo(args.vg, spx, spy);
         }
         nvgLineTo(args.vg, rect.pos.x, rect_center.y);
 
-        nvgFillColor(args.vg, fillColor);
+        nvgFillColor(args.vg, fill_color);
         nvgStrokeColor(args.vg, color);
         nvgLineCap(args.vg, NVG_ROUND);
         nvgMiterLimit(args.vg, 1.0);
@@ -584,23 +760,6 @@ struct RefluxSampleDisplay: TransparentWidget {
         nvgRestore(args.vg);
     }
 
-    struct SplitResult {
-        Rect A;
-        Rect B;
-    };
-
-    static auto split_rect_h(const Rect rect, float ratio) -> SplitResult {
-        const float h = rect.getHeight() * ratio;
-        return
-        SplitResult {A: Rect(rect.pos, Vec(rect.size.x, h)), B: Rect(rect.pos + Vec(0, h), rect.size - Vec(0, h))};
-    }
-
-    static auto split_rect_v(const Rect rect, float ratio) -> SplitResult {
-        const float w = rect.getWidth() * ratio;
-        return
-        SplitResult {A: Rect(rect.pos, Vec(w, rect.size.y)), B: Rect(rect.pos + Vec(w, 0), rect.size - Vec(w, 0))};
-    }
-
     void drawLayer(const DrawArgs& args, int layer) override {
         const float title_height = 10;
         const auto color_mint = nvgRGB(56, 189, 153);
@@ -608,61 +767,55 @@ struct RefluxSampleDisplay: TransparentWidget {
         const auto color_white = nvgRGBA(255, 255, 255, 90);
 
         if ((bool)module) {
-            AudioClip& sample = module->current_sample();
+            waveform = module->get_current_waveform<WaveformType>();
             if (layer == 1) {
                 const Rect local_box = Rect(Vec(0), box.size);
-                Rect header_rect, waveform_rect, file_name_rect, file_info_rect;
+                Rect waveform_rect;
+                Rect title_rect;
+                Rect info_rect;
                 {
                     auto result = split_rect_h(local_box, title_height / local_box.getHeight());
-                    header_rect = result.A;
+                    auto header_rect = result.A;
                     waveform_rect = result.B;
                     result = split_rect_v(header_rect, 0.6);
-                    file_name_rect = result.A;
-                    file_info_rect = result.B;
+                    title_rect = result.A;
+                    info_rect = result.B;
                 }
 
-                this->draw_rect(args, color_charcoal, local_box, true);
-                this->draw_rect(args, color_mint, file_name_rect);
-                this->draw_rect(args, color_mint, file_info_rect);
-
-                this->draw_text(args, color_mint, file_name_rect, sample.file_display.c_str());
-                this->draw_text(args, color_mint, file_info_rect, sample.file_info_display.c_str());
+                draw_rect(args, color_charcoal, local_box, true);
+                draw_rect(args, color_mint, title_rect);
+                draw_rect(args, color_mint, info_rect);
 
                 // Zero Line
-                this->draw_h_line(args, color_mint, waveform_rect, 0.5);
+                draw_h_line(args, color_mint, waveform_rect, 0.5);
 
-                if (sample.has_data()) {
-                    // Waveform
-                    draw_sample(args, color_white, waveform_rect, sample);
+                if (waveform) {
+                    // Text
+                    draw_text(args, color_mint, title_rect, waveform->get_text_title());
+                    draw_text(args, color_mint, info_rect, waveform->get_text_info());
 
-                    // marker ratio
-                    auto start_ratio = double(sample.start_head) / sample.num_frames;
-                    auto stop_ratio = double(sample.stop_head) / sample.num_frames;
-                    auto read_ratio = double(sample.read_head) / sample.num_frames;
-                    auto write_ratio = double(sample.write_head) / sample.num_frames;
+                    if (waveform->has_data()) {
+                        // Waveform
+                        draw_waveform(args, color_white, waveform_rect);
 
-                    // Play region
-                    auto color_lite_mint = color_mint;
-                    color_lite_mint.a = 0.3;
-                    const Rect pre_start_rect = split_rect_v(waveform_rect, start_ratio).A;
-                    const Rect post_stop_rect = split_rect_v(waveform_rect, stop_ratio).B;
-                    this->draw_rect(args, color_lite_mint, pre_start_rect, true);
-                    this->draw_rect(args, color_lite_mint, post_stop_rect, true);
+                        // Regions
+                        for (Region& region : waveform->get_regions()) {
+                            auto color = colorscheme.at(region.tag);
+                            color.a = 0.3;
+                            auto rect = split_rect_v(waveform_rect, region.end).A;
+                            rect = split_rect_v(rect, region.begin / region.end).B;
+                            draw_rect(args, color, rect, true);
+                        }
 
-                    // Start head marker
-                    draw_v_line(args, nvgRGB(255, 170, 0), waveform_rect, start_ratio);
-
-                    // Stop head marker
-                    draw_v_line(args, nvgRGB(155, 77, 202), waveform_rect, stop_ratio);
-
-                    // Read head marker
-                    draw_v_line(args, nvgRGB(30, 144, 255), waveform_rect, read_ratio);
-
-                    // Write head marker
-                    draw_v_line(args, nvgRGB(230, 0, 115), waveform_rect, write_ratio);
+                        // Markers
+                        for (Marker& marker : waveform->get_markers()) {
+                            auto color = colorscheme.at(marker.tag);
+                            draw_v_line(args, color, waveform_rect, marker.pos);
+                        }
+                    }
                 }
-                
-                this->draw_rect(args, color_mint, waveform_rect);
+
+                draw_rect(args, color_mint, waveform_rect);
             }
         }
         Widget::drawLayer(args, layer);
@@ -670,7 +823,74 @@ struct RefluxSampleDisplay: TransparentWidget {
 };
 
 struct RefluxWidget: ModuleWidget {
+    struct ParamGroup {
+        int first_id;
+        int count;
+    };
+
+    using ParamWidgetCreator = ParamWidget* (*)(WidgetType, Vec, Module*, int);
+    struct ParamWidgetGrirdArgs {
+        ParamGroup group;
+        Vec pos;
+        int columns = std::numeric_limits<int>::max();;
+        Vec spacing = Vec(35);
+        WidgetType default_type = WTRegularButton;
+        std::unordered_map<int, WidgetType> widget_types = {};
+        ParamWidgetCreator create_widget = &create_centered_widget<Reflux>;
+    };
+
+
+    /// @brief Generate a grid of param widgets
+    /// @param row_pos position of the first widget in the row
+    /// @param params describes which succesive param group to link to
+    /// @param opt_columns number of grid columns
+    /// @param opt_spacing optionally define the spacing between widgets
+    /// @param opt_default_type the default type of widget to create
+    /// @param widget_types define the specific widget type for any
+    /// @param opt_widget_creator which widget creator function to use
+    void add_param_widget_grid(
+        Vec row_pos,
+        ParamGroup params,
+        Optional<int> opt_columns = {},
+        Optional<Vec> opt_spacing = {},
+        Optional<WidgetType> opt_default_type = {},
+        const std::unordered_map<int, WidgetType>& widget_types = {},
+        Optional<ParamWidgetCreator> opt_widget_create = {}
+    ) {
+        const int columns = opt_columns.some() ? opt_columns.value() : INFINITY;
+        const Vec spacing = opt_spacing.some() ? opt_spacing.value() : Vec(35, 35);
+        const WidgetType default_type = opt_default_type.some() ? opt_default_type.value() : WTRegularButton;
+        const ParamWidgetCreator create_widget =
+            opt_widget_create.some() ? opt_widget_create.value() : &create_centered_widget<Reflux>;
+
+        for (int idx = 0; idx < params.count; idx++) {
+            const int param_id = params.first_id + idx;
+            const Vec pos = row_pos + Vec((float)(idx % columns) * spacing.x, (float)(idx / columns) * spacing.y);
+            const WidgetType wtype = ((bool)widget_types.count(idx)) ? widget_types.at(idx) : default_type;
+            addParam(create_widget(wtype, pos, module, param_id));
+        }
+    }
+
+    template<class WavefromType>
+    void
+    add_waveform_group(Vec group_pos, ParamGroup params, const std::unordered_map<int, WidgetType>& widget_types = {}) {
+        const int knob_offset = 15;
+        add_param_widget_grid(group_pos + Vec(knob_offset), params, {}, Some(Vec(30.0F)), Some(WTOmniKnob), widget_types);
+
+        auto* display = new WaveformDisplayWidget<WavefromType>();
+        display->box.pos = group_pos + Vec(0, 40);
+        display->box.size = Vec(150, 38);
+        display->module = dynamic_cast<Reflux*>(module);
+        addChild(display);
+    }
+
     RefluxWidget(Reflux* module) {
+        const auto slice_group_pos = Vec(15, 95);
+        const auto slice_group_knobs = 5;
+
+        const auto clip_group_pos = Vec(15, 190);
+        const std::unordered_map<int, WidgetType> clip_btn_types = {{1, WTSaveButton}, {2, WTLoadButton}};
+
         setModule(module);
         setPanel(APP->window->loadSvg(asset::plugin(pluginInstance, "res/Reflux.svg")));
 
@@ -679,41 +899,18 @@ struct RefluxWidget: ModuleWidget {
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
-        const float sample_knob_y = 205;
-        const float sample_knob_x = 30;
-        const float sample_knob_spacing = 30;
-        const int sample_first_knob = Reflux::PARAM_SELECTED_SAMPLE;
-        const int sample_last_knob = sample_first_knob + 4;
+        add_waveform_group<AudioSlice>(slice_group_pos, {Reflux::PARAM_SELECTED_SLICE, slice_group_knobs});
+        add_param_widget_grid(Vec(185, 95), {Reflux::PARAM_SLICE_PLAY, 3});
+        add_param_widget_grid(Vec(185, 135), {Reflux::PARAM_SLICE_SHIFT_L, 3});
 
-        for (int param_id = sample_first_knob; param_id <= sample_last_knob; param_id++) {
-            const int idx = param_id - sample_first_knob;
-            const Vec pos(sample_knob_x + (float)idx * sample_knob_spacing, sample_knob_y);
-            if (idx == 0) {
-                addParam(createParamCentered<RoundSmallGraySnapKnob>(pos, module, param_id));
-            } else {
-                addParam(createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(pos, module, param_id));
-            }
-        }
+        add_waveform_group<AudioClip>(clip_group_pos, {Reflux::PARAM_SELECTED_SAMPLE, 5}, {{0, WTSnapKnob}});
+        add_param_widget_grid(Vec(185, 205), {Reflux::PARAM_SAMPLE_RECORD, 3}, {}, {}, {}, clip_btn_types);
+        add_param_widget_grid(Vec(185, 245), {Reflux::PARAM_SAMPLE_PLAY, 3});
 
-        {
-            RefluxSampleDisplay* display = new RefluxSampleDisplay();
-            display->box.pos = Vec(15, 230);
-            display->box.size = Vec(150, 38);
-            display->module = module;
-            addChild(display);
-        }
-
-        addParam(createParamCentered<RubberSmallButton>(Vec(185, 205), module, Reflux::PARAM_SAMPLE_RECORD));
-        addParam(createParamCentered<SaveButton<Reflux>>(Vec(220, 205), module, Reflux::PARAM_SAMPLE_STOP_REC_SAVE));
-        addParam(createParamCentered<LoadButton<Reflux>>(Vec(255, 205), module, Reflux::PARAM_SAMPLE_LOAD));
-        addParam(createParamCentered<RubberSmallButton>(Vec(185, 245), module, Reflux::PARAM_SAMPLE_PLAY));
-        addParam(createParamCentered<RubberSmallButton>(Vec(220, 245), module, Reflux::PARAM_SAMPLE_PAUSE_MAKE_SLICE));
-        addParam(createParamCentered<RubberSmallButton>(Vec(255, 245), module, Reflux::PARAM_SAMPLE_AUTO_SLICE));
-
-        addChild(
-            createLightCentered<RubberSmallButtonLed<RedLight>>(Vec(185, 205), module, Reflux::LIGHT_SAMPLE_RECORD));
-        addChild(
-            createLightCentered<RubberSmallButtonLed<BlueLight>>(Vec(185, 245), module, Reflux::LIGHT_SAMPLE_PLAY));
+        addChild(createLightCentered<RubberSmallButtonLed<RedLight>>(Vec(185, 205), module, Reflux::LIGHT_SAMPLE_RECORD)
+        );
+        addChild(createLightCentered<RubberSmallButtonLed<BlueLight>>(Vec(185, 245), module, Reflux::LIGHT_SAMPLE_PLAY)
+        );
 
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(10.0, 101.0)), module, Reflux::INPUT_AUDIOL));
         addInput(createInputCentered<PJ301MPort>(mm2px(Vec(20.0, 101.0)), module, Reflux::INPUT_AUDIOR));
