@@ -1,10 +1,12 @@
 #include <dirent.h>
 #include <libgen.h>
+#include <math.h>
 #include <sndfile.h>
 
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -12,12 +14,14 @@
 
 #include "../dep/babycat/babycat.h"
 #include "./shared/components.hpp"
+#include "./shared/make_builder.hpp"
+#include "./shared/math.hpp"
 #include "./shared/nvg_helpers.hpp"
-#include "./shared/optional.hpp"
+#include "./shared/utils.hpp"
 #include "plugin.hpp"
 
-enum { AUDIO_SAMPLE_DISPLAY_RES = 256 };
-enum { AUDIO_SAMPLE_DISPLAY_CHANNELS = 2 };
+enum { AUDIO_CLIP_DISPLAY_RES = 256 };
+enum { AUDIO_CLIP_DISPLAY_CHANNELS = 2 };
 
 // NOLINTNEXTLINE (google-build-using-namespace)
 using namespace rage;
@@ -25,7 +29,7 @@ using IdxType = uintptr_t;
 using DisplayBufferType = std::array<std::vector<double>, 2>;
 
 struct Marker {
-    float pos;
+    double pos;
     std::string tag;
 
     bool operator<(const Marker& other) const {
@@ -33,26 +37,26 @@ struct Marker {
     }
 };
 
-class Stamp {
+class AudioConsumer {
   public:
-    const IdxType id;
+    using NotificationListener = std::function<void(void)>;
+    std::string name;
     Marker marker;
+    NotificationListener on_notify;
 
-    Stamp(float pos, std::string tag) : id(take_next_id()), marker({pos, tag}) {}
+    AudioConsumer(std::string name, float pos, std::string tag, NotificationListener on_notify) :
+        name(name),
+        marker({pos, tag}),
+        on_notify(on_notify) {}
 
-    bool operator<(const Stamp& other) const {
+    void notify() {
+        on_notify();
+    }
+
+    bool operator<(const AudioConsumer& other) const {
         return marker < other.marker;
     }
-
-  private:
-    static IdxType next_id;
-
-    static IdxType take_next_id() {
-        return ++next_id;
-    }
 };
-
-IdxType Stamp::next_id = 0;
 
 struct Region {
     float begin;
@@ -91,19 +95,32 @@ struct AudioClip {
     bool has_recorded = false;
     bool is_playing = false;
     bool is_recording = false;
+    bool events_enabled = true;
 
-    IdxType read_head = 0;
-    IdxType write_head = 1;
-    IdxType start_head = 0;
-    IdxType stop_head = 0;
+    Eventful<double>::Callback on_head_event = [this](EventfulBase::Event, double) {
+        // prevent recursive events when we fix heads
+        if (this->events_enabled) {
+            this->events_enabled = false;
+            this->fix_heads();
+            this->events_enabled = true;
+        }
+    };
 
-    std::vector<std::reference_wrapper<const Stamp>> stamps = {};
+    Eventful<double> read_head {0, on_head_event};
+    Eventful<double> write_head = {1, on_head_event};
+    Eventful<double> start_head = {0, on_head_event};
+    Eventful<double> stop_head = {0, on_head_event};
 
+    using StoredConsumer = std::shared_ptr<AudioConsumer>;
+    std::vector<StoredConsumer> consumers;
     rack::dsp::Timer write_timer;
 
-    AudioClip() : file_path("Untitled.***"), file_display(""), file_info_display("") {
-        this->display_buf.fill({});
+    AudioClip() : file_path("Untitled.***") {
         this->update_display_data();
+    }
+
+    void set_id(int id) {
+        this->id = id;
     }
 
     void load_babycat_waveform(babycat_Waveform* waveform) {
@@ -148,30 +165,36 @@ struct AudioClip {
         this->file_display = file_display.substr(0, 20);
         this->file_info_display =
             std::to_string(this->frame_rate_hz) + "Hz-" + std::to_string(this->num_channels) + "Ch";
+
         free(path_dup);
     }
 
-    void build_display_buf() {
-        for (int cidx = 0; cidx < AUDIO_SAMPLE_DISPLAY_CHANNELS; cidx++) {
-            display_buf[cidx].resize(AUDIO_SAMPLE_DISPLAY_RES, 0.0);
-            const IdxType chunk_size = this->num_frames / AUDIO_SAMPLE_DISPLAY_RES;
-            IdxType pos = 0;
+    void build_display_buf(DisplayBufferType* dst = nullptr, IdxType start = 0, Optional<IdxType> stop = {}) {
+        DisplayBufferType& buffer = ((bool)dst) ? *dst : display_buf;
+        const IdxType end = stop.some() ? stop.value() : this->num_frames;
+        IdxType chunk_size = (end - start) / AUDIO_CLIP_DISPLAY_RES;
+        chunk_size = chunk_size ? chunk_size : 1;
+
+        for (int cidx = 0; cidx < AUDIO_CLIP_DISPLAY_CHANNELS; cidx++) {
+            buffer[cidx].resize(AUDIO_CLIP_DISPLAY_RES, 0.0);
+            IdxType curr = start;
             double max = 0;
-            for (IdxType i = 0; i < AUDIO_SAMPLE_DISPLAY_RES; i++) {
+            for (IdxType i = 0; i < AUDIO_CLIP_DISPLAY_RES; i++) {
                 double accum = 0.0;
                 for (IdxType j = 0; j < chunk_size; j++) {
-                    accum += std::abs(get_sample(cidx, pos++));
+                    accum += std::abs(get_sample(cidx, curr++));
                 }
-                display_buf[cidx][i] = accum / ((double)chunk_size);
-                max = std::max(display_buf[cidx][i], max);
+                buffer[cidx][i] = accum / ((double)chunk_size);
+                max = std::max(buffer[cidx][i], max);
             }
         }
     }
 
     auto load_file(std::string& path) -> bool {
         // Try load waveform using babycat
-        if (!this->load_babycat_path(path))
+        if (!this->load_babycat_path(path)) {
             return false;
+        }
 
         this->stop_head = this->num_frames;
         this->file_path = path;
@@ -294,7 +317,7 @@ struct AudioClip {
             data[channel_idx] = get_sample(channel_idx, read_head);
         }
 
-        read_head++;
+        read_head += 1.0;
 
         return data;
     }
@@ -328,13 +351,13 @@ struct AudioClip {
             stop_head = write_head;
         }
 
-        write_head++;
+        write_head += 1;
     }
 
     void fix_heads() {
-        stop_head = std::max(start_head, stop_head);
-        read_head = std::max(start_head, read_head);
-        read_head = std::min(stop_head, read_head);
+        stop_head.silent_set(std::max<double>(start_head, stop_head));
+        read_head.silent_set(std::max<double>(start_head, read_head));
+        read_head.silent_set(std::min<double>(stop_head, read_head));
         //write_head = std::max(start_head, write_head);
     }
 
@@ -366,40 +389,47 @@ struct AudioClip {
     }
 
     auto get_text_title() const -> std::string {
-        return "";
+        return file_display;
     }
 
     auto get_text_info() const -> std::string {
-        return "";
+        return file_info_display;
     }
 
-    void add_stamp(const Stamp& stamp) {
-        stamps.push_back(stamp);
-        sort_stamps();
+    StoredConsumer create_consumer(float pos, std::string tag, AudioConsumer::NotificationListener on_notify) {
+        std::string name = "";
+        do {
+            name = random_string(4);
+        } while (find_consumer_by_name(name) >= 0);
+
+        auto obj = std::make_shared<AudioConsumer>(name, pos, tag, on_notify);
+        consumers.push_back(obj);
+        sort_consumers();
+        return obj;
     }
 
-    using StampRefType = const std::reference_wrapper<const Stamp>&;
-
-    void sort_stamps() {
-        std::sort(stamps.begin(), stamps.end(), [](StampRefType stamp1, StampRefType stamp2) {
-            return stamp1.get() < stamp2.get();
+    void sort_consumers() {
+        std::sort(consumers.begin(), consumers.end(), [](StoredConsumer consumer1, StoredConsumer consumer2) {
+            return *consumer1 < *consumer2;
         });
     }
 
-    auto find_stamp(const Stamp& stamp) const -> int {
-        auto iter = std::find_if(stamps.begin(), stamps.end(), [&](StampRefType stamp_ref) {
-            return stamp_ref.get().id == stamp.id;
-        });
-        if (iter == stamps.end()) {
+    auto find_consumer(std::function<bool(const StoredConsumer)> predicate) const -> int {
+        auto iter = std::find_if(consumers.begin(), consumers.end(), std::move(predicate));
+        if (iter == consumers.end()) {
             return -1;
         }
-        return std::distance(stamps.begin(), iter);
+        return std::distance(consumers.begin(), iter);
     }
 
-    void remove_stamp(const Stamp& stamp) {
-        const int idx = find_stamp(stamp);
+    auto find_consumer_by_name(std::string name) const -> int {
+        return find_consumer([&](const StoredConsumer other) { return other->name == name; });
+    }
+
+    void remove_consumer(const StoredConsumer& consumer) {
+        const int idx = find_consumer_by_name(consumer->name);
         if (idx >= 0) {
-            stamps.erase(stamps.begin() + idx);
+            consumers.erase(consumers.begin() + idx);
         }
     }
 };
@@ -407,42 +437,93 @@ struct AudioClip {
 struct AudioSlice {
   private:
     AudioClip& m_clip;
-    int m_start = 0;
-    int m_stop = 0;
-    int m_slice_id = 0;
-    Stamp m_stamp;
-    DisplayBufferType display_buf;
+    DisplayBufferType m_display_buf;
+    rack::dsp::Timer m_update_timer;
+    Eventful<double>::Callback m_handle_range_changed = [this](EventfulBase::Event, double) { this->update_data(); };
 
-  public:
-    AudioSlice(AudioClip& clip, int start = 0, int stop = 0) :
-        m_clip(clip),
-        m_start(start),
-        m_stop(stop),
-        m_stamp(Stamp(0, "")) {
-        update_stamp();
-        m_clip.add_stamp(m_stamp);
+    AudioConsumer::NotificationListener on_notification = [this]() { this->update_data(); };
+
+    void update_data() {
+        stop.silent_set(clamp(stop, start, m_clip.num_frames));
+        start.silent_set(clamp((double)start, 0.0L, m_clip.num_frames));
+        read = clamp((double)read, start, stop);
+        consumer->marker.pos = (float)start / (m_clip.num_frames + 1);
+        consumer->marker.tag = "start";
+        needs_ui_update = true;
     }
 
-    void update_stamp() {
-        m_stamp.marker.pos = (float)m_start / m_clip.num_frames;
-        m_stamp.marker.tag = "start";
+  public:
+    Eventful<double> start;
+    Eventful<double> stop;
+    double read;
+    bool needs_ui_update = true;
+    std::shared_ptr<AudioConsumer> consumer;
+    IdxType idx = 0;
+    IdxType total = 0;
+    bool is_playing = false;
+
+    static std::shared_ptr<AudioSlice> create(AudioClip& clip) {
+        return std::make_shared<AudioSlice>(clip);
+    }
+
+    AudioSlice(AudioClip& clip, IdxType start, IdxType stop) :
+        m_clip(clip),
+        consumer(m_clip.create_consumer(0, "", on_notification)),
+        start(Eventful<double>(start, m_handle_range_changed)),
+        stop(Eventful<double>(stop, m_handle_range_changed)),
+        read(start) {
+        update_data();
+    }
+
+    AudioSlice(AudioClip& clip) : AudioSlice(clip, clip.start_head, clip.stop_head) {}
+
+    const AudioClip& clip() {
+        return m_clip;
     }
 
     bool has_data() const {
         return true;
     }
 
+    void start_playing() {
+        this->read = start;
+        this->is_playing = true;
+    }
+
+    auto read_frame() -> std::vector<double> {
+        auto num_channels = m_clip.num_channels;
+        auto data = std::vector<double>(num_channels);
+
+        if (!is_playing || read >= stop) {
+            read = start;
+            is_playing = false;
+            return data;
+        }
+        for (IdxType channel_idx = 0; channel_idx < num_channels; channel_idx++) {
+            data[channel_idx] = m_clip.get_sample(channel_idx, read);
+        }
+        read += 1.0;
+
+        return data;
+    }
+
     auto get_text_title() const -> std::string {
-        int clip_slice_index = m_clip.find_stamp(m_stamp);
-        return "clip-" + std::to_string(m_clip.id) + "-slice-" + std::to_string(clip_slice_index);
+        int clip_slice_index = m_clip.find_consumer_by_name(consumer->name);
+        return (
+            "clip" + std::to_string(m_clip.id) + "-" + consumer->name + "-" + "[" + std::to_string(clip_slice_index)
+            + "]"
+        );
     }
 
     auto get_text_info() const -> std::string {
-        return std::to_string(m_slice_id);
+        return std::to_string(idx + 1) + "/" + std::to_string(total);
     }
 
     std::vector<Marker> get_markers() const {
-        return {};
+        auto read_ratio = float(read - start) / (stop - start);
+        return {
+            Marker {read_ratio, "read"},
+        };
     }
 
     std::vector<Region> get_regions() const {
@@ -450,11 +531,22 @@ struct AudioSlice {
     }
 
     const DisplayBufferType& get_display_buf() const {
-        return display_buf;
+        return m_display_buf;
+    }
+
+    void update_timer(float delta) {
+        if (m_update_timer.process(delta) >= rage::UI_update_time) {
+            m_update_timer.reset();
+            if (needs_ui_update) {
+                m_clip.sort_consumers();
+                m_clip.build_display_buf(&m_display_buf, start, Some<IdxType>((double)stop));
+                needs_ui_update = false;
+            }
+        }
     }
 
     ~AudioSlice() {
-        m_clip.remove_stamp(m_stamp);
+        m_clip.remove_consumer(consumer);
     }
 };
 
@@ -467,34 +559,30 @@ struct Reflux: Module {
         PARAM_SLICE_RELEASE,
         PARAM_SLICE_STOP,
 
-        // Slice Buttons 1
+        // Slice Buttons
         PARAM_SLICE_PLAY,
         PARAM_SLICE_PAUSE,
         PARAM_SLICE_DELETE,
-
-        // Slice Buttons 2
         PARAM_SLICE_SHIFT_L,
         PARAM_SLICE_SHIFT_R,
         PARAM_SLICE_LEARN_MIDI,
 
-        // Sample Knobs
-        PARAM_SELECTED_SAMPLE,
-        PARAM_SAMPLE_START,
-        PARAM_SAMPLE_READ,
-        PARAM_SAMPLE_WRITE,
-        PARAM_SAMPLE_STOP,
+        // Clip Knobs
+        PARAM_SELECTED_CLIP,
+        PARAM_CLIP_START,
+        PARAM_CLIP_READ,
+        PARAM_CLIP_WRITE,
+        PARAM_CLIP_STOP,
 
-        // Sample Buttons 1
-        PARAM_SAMPLE_RECORD,
-        PARAM_SAMPLE_STOP_REC_SAVE,
-        PARAM_SAMPLE_LOAD,
+        // CLip Buttons
+        PARAM_CLIP_RECORD,
+        PARAM_CLIP_STOP_REC_SAVE,
+        PARAM_CLIP_LOAD,
+        PARAM_CLIP_PLAY,
+        PARAM_CLIP_PAUSE_MAKE_SLICE,
+        PARAM_CLIP_AUTO_SLICE,
 
-        // Sample Buttons 2
-        PARAM_SAMPLE_PLAY,
-        PARAM_SAMPLE_PAUSE_MAKE_SLICE,
-        PARAM_SAMPLE_AUTO_SLICE,
-
-        // Global 1
+        // Global
         PARAM_GLOBAL_DRY,
         PARAM_GLOBAL_GATE_MODE,
         PARAM_GLOBAL_OVERWRITE,
@@ -523,29 +611,33 @@ struct Reflux: Module {
     enum LightIds { LIGHT_SAMPLE_RECORD, LIGHT_SAMPLE_PLAY, NUM_LIGHTS };
 
     static const int NUM_CLIPS = 12;
-    IdxType selected_sample = 0;
-    IdxType selected_slice = 0;
+    Eventful<double> selected_sample {0};
+    Eventful<double> selected_slice {0};
     std::array<AudioClip, NUM_CLIPS> clips;
-    std::vector<AudioSlice> slices {};
+    std::vector<std::shared_ptr<AudioSlice>> slices {};
     std::string directory_;
 
-    rack::dsp::BooleanTrigger record_button_trigger, play_button_trigger, pause_button_trigger;
+    rack::dsp::BooleanTrigger btntrig_clip_record, btntrig_clip_play, btntrig_clip_pause;
+    rack::dsp::BooleanTrigger btntrig_slice_play, btntrig_slice_pause, btntrig_slice_delete;
+    rack::dsp::BooleanTrigger btntrig_slice_shiftl, btntrig_slice_shiftr, btntrig_slice_learn;
 
     rack::dsp::Timer light_timer;
 
     Reflux() {
-        clips.fill(AudioClip());
         config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
-        configSwitch(PARAM_SELECTED_SAMPLE, 0.0, NUM_CLIPS - 1, 0.0, "Selected Sample");
+        configSwitch(PARAM_SELECTED_CLIP, 0.0, NUM_CLIPS - 1, 0.0, "Selected Sample");
+        for (int i = 0; i < NUM_CLIPS; i++) {
+            clips[i].id = i;
+        }
     }
 
     auto current_clip() -> AudioClip& {
-        return clips.at(selected_sample);
+        return clips.at((IdxType)selected_sample);
     }
 
     auto current_slice() -> AudioSlice* {
         if (slices.size() > selected_slice) {
-            return &slices.at(selected_slice);
+            return slices.at((IdxType)selected_slice).get();
         }
         return nullptr;
     }
@@ -583,35 +675,75 @@ struct Reflux: Module {
         return saved;
     }
 
-    //returns the target frame given
-    auto lerp_current_sample_frames(IdxType current_frame, float delta) -> IdxType {
-        const auto num_frames = current_clip().num_frames + 1;
-        float ratio = ((float)current_frame) / ((float)num_frames);
-        ratio = clamp(ratio + delta, 0.0, 1.0);
-        return (IdxType)(ratio * num_frames);
+    // interpolates from current value to the max value using delta
+    auto lerp_current_value(
+        double current_value,
+        float delta,
+        double min_value,
+        double max_value,
+        Optional<double> multiplier = {}
+    ) -> double {
+        double mult = multiplier.some() ? multiplier.value() : max_value - min_value;
+        return clamp(current_value + delta * mult, min_value, max_value);
     }
 
-    void on_omni_knob_changed(int param_id, float delta) {
-        IdxType* frame = nullptr;
+    void on_omni_knob_changed(int knob_id, float delta) {
+        delta *= 3;
+        Eventful<double>* value = nullptr;
+        double max_value = 0;
+        double min_value = 0;
+        auto multiplier = Optional<double>();
+
+        auto param_id = (ParamIds)knob_id;
+
         switch (param_id) {
-            case PARAM_SAMPLE_START:
-                frame = &(current_clip().start_head);
+            case PARAM_CLIP_START:
+                value = &current_clip().start_head;
                 break;
-            case PARAM_SAMPLE_STOP:
-                frame = &(current_clip().stop_head);
+            case PARAM_CLIP_READ:
+                value = &current_clip().read_head;
                 break;
-            case PARAM_SAMPLE_READ:
-                frame = &(current_clip().read_head);
+            case PARAM_CLIP_WRITE:
+                value = &current_clip().write_head;
                 break;
-            case PARAM_SAMPLE_WRITE:
-                frame = &(current_clip().write_head);
+            case PARAM_CLIP_STOP:
+                value = &current_clip().stop_head;
                 break;
+            case PARAM_SELECTED_SLICE: {
+                const double size = slices.size();
+                delta *= (40 + size) / (size + 4);
+                max_value = size - 1;
+                value = &selected_slice;
+                break;
+            }
+            case PARAM_SLICE_START: {
+                if (!current_slice())
+                    return;
+                value = &current_slice()->start;
+                min_value = 0;
+                max_value = current_slice()->stop;
+                multiplier = Some(max_value - *value + 1);
+                break;
+            }
+            case PARAM_SLICE_STOP: {
+                if (!current_slice())
+                    return;
+                value = &current_slice()->stop;
+                min_value = current_slice()->start;
+                max_value = current_slice()->clip().num_frames;
+                multiplier = Some(*value - min_value + 1);
+                break;
+            }
             default:
                 return;
         }
 
-        *frame = lerp_current_sample_frames(*frame, delta);
-        current_clip().fix_heads();
+        if (param_id >= PARAM_CLIP_START && param_id <= PARAM_CLIP_STOP) {
+            max_value = current_clip().num_frames;
+        }
+
+        double new_value = lerp_current_value(*value, delta, min_value, max_value, multiplier);
+        *value = new_value;
     }
 
     void process_read_input_audio(const ProcessArgs& args) {
@@ -631,49 +763,84 @@ struct Reflux: Module {
         }
     }
 
-    void process_play_clips() {
-        int clips_playing = 0;
+    void compute_output(const ProcessArgs& args) {
+        int wavefroms_playing = 0;
         double audio_out_l = 0;
         double audio_out_r = 0;
 
         for (int i = 0; i < NUM_CLIPS; i++) {
             if (clips.at(i).is_playing) {
-                clips_playing += 1;
+                wavefroms_playing += 1;
                 auto frame = clips.at(i).read_frame();
                 audio_out_l += frame[0];
                 audio_out_r += frame[1];
             }
         }
 
-        clips_playing = std::max(1, clips_playing);
-        audio_out_l /= clips_playing;
-        audio_out_r /= clips_playing;
+        for (int i = 0; i < slices.size(); i++) {
+            if (slices.at(i)->is_playing) {
+                wavefroms_playing += 1;
+                auto frame = slices.at(i)->read_frame();
+                audio_out_l += frame[0];
+                audio_out_r += frame[1];
+            }
+        }
+
+        wavefroms_playing = std::max(1, wavefroms_playing);
+        audio_out_l /= wavefroms_playing;
+        audio_out_r /= wavefroms_playing;
 
         getOutput(OUTPUT_AUDIOL).setVoltage((float)audio_out_l);
         getOutput(OUTPUT_AUDIOR).setVoltage((float)audio_out_r);
     }
 
+    void process_slices(const ProcessArgs& args) {
+        for (int i = 0; i < slices.size(); i++) {
+            slices[i]->update_timer(args.sampleTime);
+        }
+    }
+
     void process(const ProcessArgs& args) override {
         // update the select sample
-        selected_sample = (int)getParam(PARAM_SELECTED_SAMPLE).getValue();
+        selected_sample = (int)getParam(PARAM_SELECTED_CLIP).getValue();
 
         // listen for start recording button event
-        if (record_button_trigger.process(params[PARAM_SAMPLE_RECORD].getValue() > 0.0)) {
+        if (btntrig_clip_record.process(params[PARAM_CLIP_RECORD].getValue() > 0.0)) {
             current_clip().toggle_recording();
         }
 
         // listen for sample play button event
-        if (play_button_trigger.process(params[PARAM_SAMPLE_PLAY].getValue() > 0.0)) {
+        if (btntrig_clip_play.process(params[PARAM_CLIP_PLAY].getValue() > 0.0)) {
             current_clip().start_playing();
         }
 
         // listen for sample pause button event
-        if (pause_button_trigger.process(params[PARAM_SAMPLE_PAUSE_MAKE_SLICE].getValue() > 0.0)) {
+        if (btntrig_clip_pause.process(params[PARAM_CLIP_PAUSE_MAKE_SLICE].getValue() > 0.0)) {
             if (current_clip().is_playing) {
                 current_clip().toggle_playing();
-            } else {
+            } else if (current_clip().has_data()) {
                 // make slice
+                std::shared_ptr<AudioSlice> slice = AudioSlice::create(current_clip());
+                slices.push_back(slice);
+                auto size = slices.size();
+                auto idx = size - 1;
+                slice->idx = idx;
+                selected_slice = idx;
+
+                for (auto& slice : slices) {
+                    slice->total = size;
+                }
             }
+        }
+
+        if (btntrig_slice_play.process(params[PARAM_SLICE_PLAY].getValue() > 0.0)) {
+            current_slice()->start_playing();
+        }
+
+        if (btntrig_slice_pause.process(params[PARAM_SLICE_PAUSE].getValue() > 0.0)) {
+        }
+
+        if (btntrig_slice_delete.process(params[PARAM_SLICE_DELETE].getValue() > 0.0)) {
         }
 
         // update lights
@@ -686,8 +853,11 @@ struct Reflux: Module {
         // read audio input to current sample
         process_read_input_audio(args);
 
-        // write all playing clips to output
-        process_play_clips();
+        // process_clips
+        process_slices(args);
+
+        // compute_output
+        compute_output(args);
     }
 };
 
@@ -741,11 +911,14 @@ struct WaveformDisplayWidget: TransparentWidget {
             const float spy = rect_center.y + (rect.size.y / 2) * ((float)display_buf[0][i]);
             nvgLineTo(args.vg, spx, spy);
         }
-        for (unsigned int i = samples - 1; i > 0; i--) {
-            const float spx = rect.pos.x + rect.size.x * ((float)i / ((float)samples - 1));
-            const float spy = rect_center.y - (rect.size.y / 2) * ((float)display_buf[1][i]);
-            nvgLineTo(args.vg, spx, spy);
+        if (display_buf[1].size() >= samples) {
+            for (unsigned int i = samples - 1; i > 0; i--) {
+                const float spx = rect.pos.x + rect.size.x * ((float)i / ((float)samples - 1));
+                const float spy = rect_center.y - (rect.size.y / 2) * ((float)display_buf[1][i]);
+                nvgLineTo(args.vg, spx, spy);
+            }
         }
+
         nvgLineTo(args.vg, rect.pos.x, rect_center.y);
 
         nvgFillColor(args.vg, fill_color);
@@ -829,83 +1002,82 @@ struct RefluxWidget: ModuleWidget {
     };
 
     using ParamWidgetCreator = ParamWidget* (*)(WidgetType, Vec, Module*, int);
+    using ParamWidgetTypeMap = std::unordered_map<int, WidgetType>;
     struct ParamWidgetGrirdArgs {
-        ParamGroup group;
         Vec pos;
-        int columns = std::numeric_limits<int>::max();;
-        Vec spacing = Vec(35);
+        Vec spacing = Vec(35, 40);
+        int columns = std::numeric_limits<int>::max();
+        ParamGroup group;
         WidgetType default_type = WTRegularButton;
-        std::unordered_map<int, WidgetType> widget_types = {};
+        ParamWidgetTypeMap custom_types = {};
         ParamWidgetCreator create_widget = &create_centered_widget<Reflux>;
     };
 
+    MAKE_BUILDER(
+        PWGArgs,
+        ParamWidgetGrirdArgs,
+        pos,
+        spacing,
+        columns,
+        group,
+        default_type,
+        custom_types,
+        create_widget
+    );
 
-    /// @brief Generate a grid of param widgets
-    /// @param row_pos position of the first widget in the row
-    /// @param params describes which succesive param group to link to
-    /// @param opt_columns number of grid columns
-    /// @param opt_spacing optionally define the spacing between widgets
-    /// @param opt_default_type the default type of widget to create
-    /// @param widget_types define the specific widget type for any
-    /// @param opt_widget_creator which widget creator function to use
-    void add_param_widget_grid(
-        Vec row_pos,
-        ParamGroup params,
-        Optional<int> opt_columns = {},
-        Optional<Vec> opt_spacing = {},
-        Optional<WidgetType> opt_default_type = {},
-        const std::unordered_map<int, WidgetType>& widget_types = {},
-        Optional<ParamWidgetCreator> opt_widget_create = {}
-    ) {
-        const int columns = opt_columns.some() ? opt_columns.value() : INFINITY;
-        const Vec spacing = opt_spacing.some() ? opt_spacing.value() : Vec(35, 35);
-        const WidgetType default_type = opt_default_type.some() ? opt_default_type.value() : WTRegularButton;
-        const ParamWidgetCreator create_widget =
-            opt_widget_create.some() ? opt_widget_create.value() : &create_centered_widget<Reflux>;
+    void add_param_widget_grid(ParamWidgetGrirdArgs args) {
+        const int columns = args.columns;
+        const Vec spacing = args.spacing;
+        const auto custom_types = args.custom_types;
 
-        for (int idx = 0; idx < params.count; idx++) {
-            const int param_id = params.first_id + idx;
-            const Vec pos = row_pos + Vec((float)(idx % columns) * spacing.x, (float)(idx / columns) * spacing.y);
-            const WidgetType wtype = ((bool)widget_types.count(idx)) ? widget_types.at(idx) : default_type;
-            addParam(create_widget(wtype, pos, module, param_id));
+        for (int idx = 0; idx < args.group.count; idx++) {
+            const int param_id = args.group.first_id + idx;
+            const Vec pos = args.pos + Vec((float)(idx % columns) * spacing.x, (float)(idx / columns) * spacing.y);
+            const WidgetType wtype = ((bool)custom_types.count(idx)) ? custom_types.at(idx) : args.default_type;
+            addParam(args.create_widget(wtype, pos, module, param_id));
         }
     }
 
     template<class WavefromType>
-    void
-    add_waveform_group(Vec group_pos, ParamGroup params, const std::unordered_map<int, WidgetType>& widget_types = {}) {
-        const int knob_offset = 15;
-        add_param_widget_grid(group_pos + Vec(knob_offset), params, {}, Some(Vec(30.0F)), Some(WTOmniKnob), widget_types);
+    void add_waveform_group(Vec pos, ParamGroup group, const ParamWidgetTypeMap& custom_types = {}) {
+        add_param_widget_grid(PWGArgs()
+                                  .group(group)
+                                  .pos(pos)
+                                  .spacing(Vec(30.0F, 40.F))
+                                  .default_type(WTOmniKnob)
+                                  .custom_types(custom_types));
 
         auto* display = new WaveformDisplayWidget<WavefromType>();
-        display->box.pos = group_pos + Vec(0, 40);
+        display->box.pos = pos + Vec(-15, 25);
         display->box.size = Vec(150, 38);
         display->module = dynamic_cast<Reflux*>(module);
         addChild(display);
     }
 
-    RefluxWidget(Reflux* module) {
-        const auto slice_group_pos = Vec(15, 95);
+    explicit RefluxWidget(Reflux* module) {
+        const auto slice_group_pos = Vec(30, 110);
         const auto slice_group_knobs = 5;
-
-        const auto clip_group_pos = Vec(15, 190);
-        const std::unordered_map<int, WidgetType> clip_btn_types = {{1, WTSaveButton}, {2, WTLoadButton}};
+        const auto clip_group_pos = Vec(30, 205);
 
         setModule(module);
         setPanel(APP->window->loadSvg(asset::plugin(pluginInstance, "res/Reflux.svg")));
 
+        // Screws
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, 0)));
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, 0)));
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
+        // Audio Slice
         add_waveform_group<AudioSlice>(slice_group_pos, {Reflux::PARAM_SELECTED_SLICE, slice_group_knobs});
-        add_param_widget_grid(Vec(185, 95), {Reflux::PARAM_SLICE_PLAY, 3});
-        add_param_widget_grid(Vec(185, 135), {Reflux::PARAM_SLICE_SHIFT_L, 3});
+        add_param_widget_grid(PWGArgs().pos(Vec(185, 110)).group({Reflux::PARAM_SLICE_PLAY, 6}).columns(3));
 
-        add_waveform_group<AudioClip>(clip_group_pos, {Reflux::PARAM_SELECTED_SAMPLE, 5}, {{0, WTSnapKnob}});
-        add_param_widget_grid(Vec(185, 205), {Reflux::PARAM_SAMPLE_RECORD, 3}, {}, {}, {}, clip_btn_types);
-        add_param_widget_grid(Vec(185, 245), {Reflux::PARAM_SAMPLE_PLAY, 3});
+        // Audio Clip
+        const ParamWidgetTypeMap btns = {{1, WTSaveButton}, {2, WTLoadButton}};
+        add_waveform_group<AudioClip>(clip_group_pos, {Reflux::PARAM_SELECTED_CLIP, 5}, {{0, WTSnapKnob}});
+        add_param_widget_grid(
+            PWGArgs().pos(Vec(185, 205)).group({Reflux::PARAM_CLIP_RECORD, 6}).columns(3).custom_types(btns)
+        );
 
         addChild(createLightCentered<RubberSmallButtonLed<RedLight>>(Vec(185, 205), module, Reflux::LIGHT_SAMPLE_RECORD)
         );
