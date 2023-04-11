@@ -15,7 +15,7 @@
       "envFile": "${workspaceFolder}/config.env",
       "preLaunchTask": "Build application and add to Rack plugin folder",
       "externalConsole": false,
-      "console": "internalConsole"
+      "console": "internalConsole",
     },
     {
       "name": "Launch Debug",

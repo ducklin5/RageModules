@@ -47,7 +47,7 @@ Optional<T> None() {  //NOLINT
 // ***********
 
 struct EventfulBase {
-    enum Event { Assigned, Incremented };
+    enum Event { Assigned, Incremented, Decremented };
 };
 
 template<typename T>
@@ -80,7 +80,7 @@ struct Eventful: EventfulBase {
     }
     
     auto can_emit() -> bool {
-        return (on_event != nullptr) && enabled;
+        return on_event && enabled;
     }
 
     void try_emit(Event event) {
@@ -117,6 +117,12 @@ struct Eventful: EventfulBase {
     auto operator+= (const T& other_value) -> Eventful<T>& {
         value += other_value;
         try_emit(Event::Incremented);
+        return *this;
+    }
+    
+    auto operator-= (const T& other_value) -> Eventful<T>& {
+        value -= other_value;
+        try_emit(Event::Decremented);
         return *this;
     }
 

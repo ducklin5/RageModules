@@ -175,10 +175,11 @@ enum WidgetType {
     WTSaveButton,
     WTSnapKnob,
     WTOmniKnob,
+    WTInputPort
 };
 
 template<class ParentModule>
-ParamWidget* create_centered_widget(const WidgetType wtype, Vec pos, Module* module, int param_id) {
+Widget* create_centered_widget(const WidgetType wtype, Vec pos, Module* module, int param_id) {
     switch (wtype) {
         case WTRegularButton:
             return createParamCentered<RubberSmallButton>(pos, module, param_id);
@@ -190,6 +191,8 @@ ParamWidget* create_centered_widget(const WidgetType wtype, Vec pos, Module* mod
             return createParamCentered<RoundSmallGraySnapKnob>(pos, module, param_id);
         case WTOmniKnob:
             return createParamCentered<RoundSmallGrayOmniKnob<ParentModule>>(pos, module, param_id);
+        case WTInputPort:
+            return createInputCentered<PJ301MPort>(pos, module, param_id);
     }
     return nullptr;
 }
