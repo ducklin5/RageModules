@@ -17,655 +17,17 @@
 #include <utility>
 #include <vector>
 
-#include "../dep/babycat/babycat.h"
-#include "./shared/components.hpp"
-#include "./shared/make_builder.hpp"
-#include "./shared/math.hpp"
-#include "./shared/nvg_helpers.hpp"
-#include "./shared/utils.hpp"
 #include "plugin.hpp"
-
-enum { AUDIO_CLIP_DISPLAY_RES = 128 };
-enum { AUDIO_CLIP_DISPLAY_CHANNELS = 2 };
+#include "src/reflux/audio_base.hpp"
+#include "src/reflux/audio_clip.hpp"
+#include "src/reflux/audio_slice.hpp"
+#include "src/shared/components.hpp"
+#include "src/shared/make_builder.hpp"
+#include "src/shared/nvg_helpers.hpp"
+#include "src/shared/utils.hpp"
 
 // NOLINTNEXTLINE (google-build-using-namespace)
 using namespace rage;
-using IdxType = uintptr_t;
-using DisplayBufferType = std::array<std::vector<double>, 2>;
-
-struct DisplayBufferBuilder {
-    struct BuildArgs {
-        std::function<double(IdxType, IdxType)> get_sample = nullptr;
-        DisplayBufferType* dst = nullptr;
-        IdxType start = 0;
-        IdxType stop = 0;
-
-        BuildArgs() = default;
-
-        BuildArgs(std::function<double(IdxType, IdxType)> get_sample, DisplayBufferType* dst, IdxType start, IdxType stop) :
-            get_sample(get_sample),
-            dst(dst),
-            start(start),
-            stop(stop) {}
-    };
-
-  private:
-    std::thread workerThread;
-    std::mutex workerMutex;
-    std::condition_variable workerCv;
-    bool running;
-    std::queue<DisplayBufferType*> tasks;
-    std::unordered_map<DisplayBufferType*, BuildArgs> task_args;
-
-  public:
-    DisplayBufferBuilder() {
-        workerThread = std::thread([this] { run(); });
-    }
-
-    ~DisplayBufferBuilder() {
-        running = false;
-        workerCv.notify_one();
-        workerThread.join();
-    }
-
-    void build(BuildArgs args) {
-        std::lock_guard<std::mutex> lock(workerMutex);
-        tasks.push(args.dst);
-        task_args[args.dst] = args;
-        workerCv.notify_one();
-    }
-
-  private:
-    void run() {
-        running = true;
-        std::unique_lock<std::mutex> lock(workerMutex);
-        while (running) {
-            if (tasks.empty()) {
-                workerCv.wait(lock);
-                continue;
-            }
-            DisplayBufferType* dst = tasks.front();
-            tasks.pop();
-            if (task_args.count(dst)) {
-                BuildArgs args = task_args[dst];
-                task_args.erase(dst);
-                lock.unlock();
-                build_(args);
-                lock.lock();
-            }
-        }
-    }
-
-    void build_(BuildArgs args) {
-        DisplayBufferType& buffer = *args.dst;
-        IdxType chunk_size = (args.stop - args.start) / AUDIO_CLIP_DISPLAY_RES;
-        chunk_size = chunk_size ? chunk_size : 1;
-
-        for (int cidx = 0; cidx < AUDIO_CLIP_DISPLAY_CHANNELS; cidx++) {
-            buffer[cidx].resize(AUDIO_CLIP_DISPLAY_RES, 0.0);
-            IdxType curr = args.start;
-            double max = 0;
-            for (IdxType i = 0; i < AUDIO_CLIP_DISPLAY_RES; i++) {
-                double accum = 0.0;
-                for (IdxType j = 0; j < chunk_size; j++) {
-                    accum += std::abs(args.get_sample(cidx, curr++));
-                }
-                buffer[cidx][i] = accum / ((double)chunk_size);
-                max = std::max(buffer[cidx][i], max);
-            }
-        }
-    }
-};
-
-struct Marker {
-    double pos;
-    std::string tag;
-
-    bool operator<(const Marker& other) const {
-        return pos < other.pos;
-    }
-};
-
-class AudioConsumer {
-  public:
-    using NotificationListener = std::function<void(void)>;
-    std::string name;
-    Marker marker;
-    NotificationListener on_notify;
-
-    AudioConsumer(std::string name, float pos, std::string tag, NotificationListener on_notify) :
-        name(name),
-        marker({pos, tag}),
-        on_notify(on_notify) {}
-
-    void notify() {
-        on_notify();
-    }
-
-    bool operator<(const AudioConsumer& other) const {
-        return marker < other.marker;
-    }
-};
-
-struct Region {
-    float begin;
-    float end;
-    std::string tag;
-
-    Region(float begin, float end, const std::string& tag = "region") : begin(begin), end(end), tag(tag) {}
-};
-
-struct BabycatWaveformInfo {
-    IdxType num_frames;
-    IdxType num_channels;
-    IdxType num_samples;
-    IdxType frame_rate_hz;
-
-    explicit BabycatWaveformInfo(babycat_Waveform* waveform) :
-        num_frames(babycat_waveform_get_num_frames(waveform)),
-        num_channels(babycat_waveform_get_num_channels(waveform)),
-        num_samples(babycat_waveform_get_num_samples(waveform)),
-        frame_rate_hz(babycat_waveform_get_frame_rate_hz(waveform)) {}
-};
-
-struct AudioClip {
-    int id = 0;
-    IdxType num_frames = 0;
-    IdxType num_channels = 0;
-    IdxType frame_rate_hz = 0;
-    std::vector<std::vector<double>> raw_data;
-
-    std::string file_path;
-    std::string file_display;
-    std::string file_info_display;
-    DisplayBufferType display_buf;
-
-    bool has_loaded = false;
-    bool has_recorded = false;
-    bool is_playing = false;
-    bool is_recording = false;
-    bool events_enabled = true;
-
-    Eventful<double>::Callback on_head_event = [this](EventfulBase::Event, double) {
-        // prevent recursive events when we fix heads
-        this->fix_heads();
-    };
-
-    Eventful<double> read_head {0, on_head_event};
-    Eventful<double> write_head {1.0, on_head_event};
-    Eventful<double> start_head {0, on_head_event};
-    Eventful<double> stop_head {0, on_head_event};
-
-    using StoredConsumer = std::shared_ptr<AudioConsumer>;
-    std::vector<StoredConsumer> consumers;
-    rack::dsp::Timer write_timer;
-    DisplayBufferBuilder* display_buffer_builder = nullptr;
-
-    AudioClip() : file_path("Unsaved.***") {
-        this->update_display_data();
-    }
-
-    void set_id(int id) {
-        this->id = id;
-    }
-
-    void load_babycat_waveform(babycat_Waveform* waveform) {
-        const auto info = BabycatWaveformInfo(waveform);
-        this->num_frames = info.num_frames;
-        this->num_channels = info.num_channels;
-        this->frame_rate_hz = info.frame_rate_hz;
-        this->raw_data.resize(this->num_channels);
-
-        for (IdxType cidx = 0; cidx < this->num_channels; cidx++) {
-            this->raw_data[cidx].resize(this->num_frames, 0.0);
-            for (IdxType fidx = 0; fidx < this->num_frames; fidx++) {
-                this->raw_data[cidx][fidx] = babycat_waveform_get_unchecked_sample(waveform, fidx, cidx);
-            }
-        }
-    }
-
-    auto load_babycat_path(std::string& path) -> bool {
-        const babycat_WaveformArgs waveform_args = babycat_waveform_args_init_default();
-        const babycat_WaveformResult waveform_result = babycat_waveform_from_file(path.c_str(), waveform_args);
-        if (waveform_result.error_num != 0) {
-            printf("Failed to load audio clip [%s] with error: %u\n", path.c_str(), waveform_result.error_num);
-            return false;
-        }
-
-        auto* waveform = waveform_result.result;
-        {
-            // make sure we are working with 1 sample per channel in each frame
-            auto info = BabycatWaveformInfo(waveform);
-            const IdxType samples_per_channel_per_frame = info.num_samples / (info.num_channels * info.num_frames);
-            babycat_waveform_resample(waveform, info.frame_rate_hz * samples_per_channel_per_frame);
-        }
-
-        this->load_babycat_waveform(waveform);
-        return true;
-    }
-
-    void update_display_data() {
-        char* path_dup = strdup(this->file_path.c_str());
-        std::string const file_description = basename(path_dup);
-        this->file_display = file_description.substr(0, file_description.size() - 4);
-        this->file_display = file_display.substr(0, 20);
-        this->file_info_display = fmt::format("{}Hz-{}Ch", this->frame_rate_hz, this->num_channels);
-
-        free(path_dup);
-    }
-
-    void build_display_buf_self() {
-        using namespace std::placeholders;
-        const auto get_sample_lambda = std::bind(&AudioClip::get_sample, this, _1, _2);
-        if (this->display_buffer_builder) {
-            display_buffer_builder->build({get_sample_lambda, &display_buf, 0, num_frames});
-        }
-    }
-
-    auto load_file(std::string& path) -> bool {
-        // Try load waveform using babycat
-        if (!this->load_babycat_path(path)) {
-            return false;
-        }
-
-        this->stop_head = this->num_frames;
-        this->file_path = path;
-        this->has_loaded = true;
-        this->has_recorded = false;
-        this->update_display_data();
-        this->build_display_buf_self();
-
-        return true;
-    }
-
-    auto save_file(std::string& path) -> bool {
-        SF_INFO info = {
-            frames: (int)this->num_frames,
-            samplerate: (int)this->frame_rate_hz,
-            channels: (int)this->num_channels,
-            format: SF_FORMAT_WAV | SF_FORMAT_PCM_24,
-            sections: 1,
-            seekable: 1,
-        };
-
-        std::cout << "Writting to file: " << path << std::endl;
-        SNDFILE* file = sf_open(path.c_str(), SFM_WRITE, &info);
-        if (!(bool)file) {
-            std::cout << "Failed to open output file: " << sf_strerror(file) << std::endl;
-            return false;
-        }
-
-        const auto num_samples = (sf_count_t)(num_channels * num_frames);
-        auto save_buffer = std::vector<double>(num_samples);
-
-        for (IdxType cidx = 0; cidx < this->num_channels; cidx++) {
-            for (IdxType fidx = 0; fidx < this->num_frames; fidx++) {
-                save_buffer[num_channels * fidx + cidx] = get_sample(cidx, fidx);
-            }
-        }
-
-        // Write the audio samples to the output file.
-        bool result = true;
-        const sf_count_t num_written = sf_write_double(file, save_buffer.data(), num_samples);
-        if (num_written != num_samples) {
-            std::cerr << "Failed to write samples to output file" << std::endl;
-            result = false;
-        }
-
-        // Close the output file.
-        sf_close(file);
-
-        if (result) {
-            this->file_path = path;
-            this->has_recorded = false;
-            this->has_loaded = true;
-            this->update_display_data();
-        }
-
-        return result;
-    }
-
-    auto get_sample(IdxType channel_idx, IdxType frame_idx) -> double {
-        if (channel_idx >= this->raw_data.size() || frame_idx >= this->raw_data[channel_idx].size()) {
-            return 0;
-        }
-        return this->raw_data[channel_idx][frame_idx];
-    }
-
-    auto set_sample(IdxType channel_idx, IdxType frame_idx, double value, bool overwrite = true) -> bool {
-        if (channel_idx >= this->num_channels) {
-            this->num_channels = channel_idx + 1;
-            this->raw_data.resize(this->num_channels);
-        }
-        this->num_frames = std::max(num_frames, frame_idx + 1);
-
-        auto& channel = raw_data[channel_idx];
-
-        if (frame_idx >= channel.size()) {
-            double segment_size = (double)frame_rate_hz * 60 * 3;
-            double capacity_segments = ceil((double)frame_idx / segment_size);
-            channel.reserve(capacity_segments * segment_size);
-            channel.resize(frame_idx + 1);
-        }
-
-        channel[frame_idx] = value;
-        return true;
-    }
-
-    auto has_data() const -> bool {
-        return has_loaded || has_recorded;
-    }
-
-    void start_playing() {
-        if (has_data()) {
-            this->read_head = start_head;
-            this->is_playing = true;
-        }
-    }
-
-    void toggle_playing() {
-        if (this->is_playing) {
-            this->is_playing = false;
-        } else {
-            start_playing();
-        }
-    }
-
-    void toggle_recording() {
-        this->is_recording = !(this->is_recording);
-        if (is_recording) {
-        }
-    }
-
-    auto read_frame() -> std::vector<double> {
-        auto data = std::vector<double>(num_channels);
-
-        if (!is_playing || read_head >= stop_head) {
-            read_head = start_head;
-            is_playing = false;
-            return data;
-        }
-
-        for (IdxType channel_idx = 0; channel_idx < num_channels; channel_idx++) {
-            data[channel_idx] = get_sample(channel_idx, read_head);
-        }
-
-        read_head.value += 1.0;
-
-        return data;
-    }
-
-    struct WriteArgs {
-        bool overwrite {true};
-        float delta {0.0};
-        IdxType channel_count {2};
-        WriteArgs() {}  // NOLINT
-    };
-
-    void write_frame(const double* channels, WriteArgs args = {}) {
-        if (!is_recording) {
-            return;
-        }
-
-        frame_rate_hz = 1.0 / args.delta;
-
-        for (IdxType cidx = 0; cidx < args.channel_count; cidx++) {
-            set_sample(cidx, write_head.value, channels[cidx], args.overwrite);
-        }
-
-        this->has_recorded = true;
-
-        if (write_head.value == stop_head.value) {
-            is_recording = false;
-        } else if (write_head.value > stop_head.value) {
-            stop_head.value = write_head;
-        }
-
-        write_head.value += 1;
-
-        if (write_timer.process(args.delta) > rage::UI_update_time) {
-            write_timer.reset();
-            this->update_display_data();
-            this->build_display_buf_self();
-        }
-    }
-
-    void fix_heads() {
-        stop_head.silent_set(std::max<double>(start_head, stop_head));
-        read_head.silent_set(std::max<double>(start_head, read_head));
-        read_head.silent_set(std::min<double>(stop_head, read_head));
-    }
-
-    const DisplayBufferType& get_display_buf() const {
-        return display_buf;
-    }
-
-    std::vector<Marker> get_markers() const {
-        auto start_ratio = float(start_head) / num_frames;
-        auto stop_ratio = float(stop_head) / num_frames;
-        auto read_ratio = float(read_head) / num_frames;
-        auto write_ratio = float(write_head) / num_frames;
-        return {
-            Marker {start_ratio, "start"},
-            Marker {stop_ratio, "stop"},
-            Marker {read_ratio, "read"},
-            Marker {write_ratio, "write"},
-        };
-    }
-
-    std::vector<Region> get_regions() const {
-        auto start_ratio = float(start_head) / num_frames;
-        auto stop_ratio = float(stop_head) / num_frames;
-
-        return {
-            Region {0.0F, start_ratio},
-            Region {stop_ratio, 1.0F},
-        };
-    }
-
-    auto get_text_title() const -> std::string {
-        return file_display;
-    }
-
-    auto get_text_info() const -> std::string {
-        return file_info_display;
-    }
-
-    StoredConsumer create_consumer(float pos, std::string tag, AudioConsumer::NotificationListener on_notify) {
-        std::string name = "";
-        do {
-            name = random_string(4);
-        } while (find_consumer_by_name(name) >= 0);
-
-        auto obj = std::make_shared<AudioConsumer>(name, pos, tag, on_notify);
-        consumers.push_back(obj);
-        sort_consumers();
-        return obj;
-    }
-
-    void sort_consumers() {
-        std::sort(consumers.begin(), consumers.end(), [](StoredConsumer consumer1, StoredConsumer consumer2) {
-            return *consumer1 < *consumer2;
-        });
-    }
-
-    auto find_consumer(std::function<bool(const StoredConsumer)> predicate) const -> int {
-        auto iter = std::find_if(consumers.begin(), consumers.end(), std::move(predicate));
-        if (iter == consumers.end()) {
-            return -1;
-        }
-        return std::distance(consumers.begin(), iter);
-    }
-
-    auto find_consumer_by_name(std::string name) const -> int {
-        return find_consumer([&](const StoredConsumer other) { return other->name == name; });
-    }
-
-    void remove_consumer(const StoredConsumer& consumer) {
-        const int idx = find_consumer_by_name(consumer->name);
-        if (idx >= 0) {
-            consumers.erase(consumers.begin() + idx);
-        }
-    }
-
-    json_t* make_json_obj() {
-        return json_object();
-    }
-
-    void load_json(json_t* obj) {}
-};
-
-struct AudioSlice {
-  private:
-    AudioClip& m_clip;
-    DisplayBufferType m_display_buf;
-    rack::dsp::Timer m_update_timer;
-    Eventful<double>::Callback m_handle_range_changed = [this](EventfulBase::Event, double) { this->update_data(); };
-
-    AudioConsumer::NotificationListener on_notification = [this]() { this->update_data(); };
-
-    void update_data() {
-        stop.silent_set(clamp(stop, start, m_clip.num_frames));
-        start.silent_set(clamp((double)start, 0.0L, m_clip.num_frames));
-        attack.silent_set(clamp((double)attack, start, stop));
-        release.silent_set(clamp((double)release, start, stop));
-        read = clamp((double)read, start, stop);
-        consumer->marker.pos = (float)start / (m_clip.num_frames + 1);
-        consumer->marker.tag = "start";
-        needs_ui_update = true;
-    }
-
-  public:
-    Eventful<double> start;
-    Eventful<double> stop;
-    Eventful<double> attack;
-    Eventful<double> release;
-
-    double read;
-    bool needs_ui_update = true;
-    std::shared_ptr<AudioConsumer> consumer;
-    IdxType idx = 0;
-    IdxType total = 0;
-    bool is_playing = false;
-     
-    DisplayBufferBuilder* display_buffer_builder;
-
-    static std::shared_ptr<AudioSlice> create(AudioClip& clip, DisplayBufferBuilder* dbb = nullptr) {
-        return std::make_shared<AudioSlice>(clip, dbb);
-    }
-
-    AudioSlice(AudioClip& clip, IdxType start, IdxType stop, DisplayBufferBuilder* dbb = nullptr) :
-        m_clip(clip),
-        consumer(m_clip.create_consumer(0, "", on_notification)),
-        start(Eventful<double>(start, m_handle_range_changed)),
-        stop(Eventful<double>(stop, m_handle_range_changed)),
-        attack(Eventful<double>(start, m_handle_range_changed)),
-        release(Eventful<double>(stop, m_handle_range_changed)),
-        read(start),
-        display_buffer_builder(dbb)
-    {
-        update_data();
-    }
-
-    AudioSlice(AudioClip& clip, DisplayBufferBuilder* dbb) : AudioSlice(clip, clip.start_head, clip.stop_head, dbb) {}
-
-    const AudioClip& clip() {
-        return m_clip;
-    }
-
-    bool has_data() const {
-        return true;
-    }
-
-    void start_playing() {
-        this->read = start;
-        this->is_playing = true;
-    }
-
-    void toggle_playing() {
-        is_playing = !is_playing;
-    }
-
-    auto get_sample(IdxType channel_idx, IdxType frame_idx) -> double {
-        const double attack_mult =
-            (attack > start && frame_idx < attack) ? (frame_idx - start) / (attack - start) : 1.0;
-
-        const double release_mult =
-            (release < stop && frame_idx > release) ? 1.0 - ((frame_idx - release) / (stop - release)) : 1.0;
-
-        return attack_mult * release_mult * m_clip.get_sample(channel_idx, frame_idx);
-    }
-
-    auto read_frame() -> std::vector<double> {
-        auto num_channels = m_clip.num_channels;
-        auto data = std::vector<double>(num_channels);
-
-        if (!is_playing || read >= stop) {
-            read = start;
-            is_playing = false;
-            return data;
-        }
-        for (IdxType channel_idx = 0; channel_idx < num_channels; channel_idx++) {
-            data[channel_idx] = get_sample(channel_idx, read);
-        }
-        read += 1.0;
-
-        return data;
-    }
-
-    auto get_text_title() const -> std::string {
-        int clip_slice_index = m_clip.find_consumer_by_name(consumer->name);
-        return fmt::format("clip{}-{}-[{}]", (int) m_clip.id, consumer->name, clip_slice_index);
-    }
-
-    auto get_text_info() const -> std::string {
-        return fmt::format("{}/{}", idx + 1, total);
-    }
-
-    std::vector<Marker> get_markers() const {
-        auto read_ratio = float(read - start) / (stop - start);
-        auto attack_ratio = float(attack - start) / (stop - start);
-        auto release_ratio = float(release - start) / (stop - start);
-        return {
-            Marker {read_ratio, "read"},
-            Marker {attack_ratio, "attack"},
-            Marker {release_ratio, "release"},
-        };
-    }
-
-    std::vector<Region> get_regions() const {
-        return {};
-    }
-
-    const DisplayBufferType& get_display_buf() const {
-        return m_display_buf;
-    }
-
-    void update_timer(float delta) {
-        using namespace std::placeholders;
-        const auto get_sample_lambda = std::bind(&AudioSlice::get_sample, this, _1, _2);
-
-        if (m_update_timer.process(delta) >= rage::UI_update_time) {
-            m_update_timer.reset();
-            if (needs_ui_update) {
-                m_clip.sort_consumers();
-                if(display_buffer_builder)
-                    display_buffer_builder->build({get_sample_lambda, &m_display_buf, (IdxType) start, (IdxType) stop});
-                needs_ui_update = false;
-            }
-        }
-    }
-
-    json_t* make_json_obj() {
-        return json_object();
-    }
-
-    void load_json(json_t* obj) {}
-
-    ~AudioSlice() {
-        m_clip.remove_consumer(consumer);
-    }
-};
 
 struct Reflux: Module {
     enum ParamIds {
@@ -700,50 +62,66 @@ struct Reflux: Module {
         PARAM_CLIP_AUTO_SLICE,
 
         // Global
-        PARAM_GLOBAL_DRY,
-        PARAM_GLOBAL_GATE_MODE,
-        PARAM_GLOBAL_OVERWRITE,
-        PARAM_GLOBAL_REC_MANY,
-        PARAM_GLOBAL_SLICES,
-        PARAM_GLOBAL_SLICE_CV_MODE,
-        PARAM_GLOBAL_SLICE_CV_ATNV,
+        PARAM_GLOBAL_TRIG0_TARGET,
+        PARAM_GLOBAL_FOLLOW,
         NUM_PARAMS
     };
 
     enum InputIds {
-        INPUT_SELECT_CV,
-        INPUT_SELECT_TRIGGER,
+        INPUT_TRIGGER0,
+        INPUT_CV0,
 
-        INPUT_TRIGGER1,
-        INPUT_TRIGGER2,
+        INPUT_CV1,
+        INPUT_CV2,
 
         INPUT_AUDIOL,
         INPUT_AUDIOR,
 
-        INPUT_CV1,
-        INPUT_CV2,
+        INPUT_TRIGGER1,
+        INPUT_TRIGGER2,
 
         NUM_INPUTS
     };
 
     enum OutputIds { OUTPUT_AUDIOL, OUTPUT_AUDIOR, OUTPUT_BOS, OUTPUT_EOS, NUM_OUTPUTS };
 
-    enum LightIds { LIGHT_SLICE_PLAY, LIGHT_SAMPLE_RECORD, LIGHT_SAMPLE_PLAY, NUM_LIGHTS };
+    enum LightIds {
+        LIGHT_SLICE_PLAY,
+        LIGHT_CLIP_RECORD,
+        LIGHT_CLIP_PLAY,
+        LIGHT_CLIP_CLEAR,
+        LIGHT_GLOBAL_TRIG0_TARGET,
+        LIGHT_GLOBAL_FOLLOW,
+        NUM_LIGHTS
+    };
+
+    enum InTrigTarget { INTRIG_TARGET_CLIP, INTRIG_TARGET_SLICE };
 
     static const int NUM_CLIPS = 12;
-    Eventful<double> selected_sample {0};
-    Eventful<double> selected_slice {0};
     DisplayBufferBuilder slice_dbb;
     DisplayBufferBuilder clip_dbb;
     std::array<AudioClip, NUM_CLIPS> clips;
     std::vector<std::shared_ptr<AudioSlice>> slices {};
     std::string directory_;
 
-    rack::dsp::BooleanTrigger btntrig_clip_record, btntrig_clip_play, btntrig_clip_pause;
-    rack::dsp::BooleanTrigger btntrig_slice_play, btntrig_slice_pause, btntrig_slice_delete;
-    rack::dsp::BooleanTrigger btntrig_slice_shiftl, btntrig_slice_shiftr, btntrig_slice_learn;
+    InTrigTarget cvtrig0_target = INTRIG_TARGET_CLIP;
+    InTrigTarget trig1_target = INTRIG_TARGET_CLIP;
+    InTrigTarget trig2_target = INTRIG_TARGET_CLIP;
+    bool global_follow = false;
 
-    rack::dsp::BooleanTrigger intrig_trigger;
+    Eventful<double> selected_clip {0};
+    Eventful<double> selected_slice {0};
+    std::array<double, PORT_MAX_CHANNELS> selected_clip_cv;
+    std::array<double, PORT_MAX_CHANNELS> selected_slice_cv;
+
+    using BooleanTrigger = rack::dsp::BooleanTrigger;
+
+    BooleanTrigger btntrig_slice_shiftl, btntrig_slice_shiftr, btntrig_slice_delete;
+    BooleanTrigger btntrig_slice_play, btntrig_slice_pause, btntrig_slice_learn;
+    BooleanTrigger btntrig_clip_record, btntrig_clip_play, btntrig_clip_pause;
+    BooleanTrigger btntrig_global_trig0_taget, btntrig_global_follow;
+
+    std::array<BooleanTrigger, PORT_MAX_CHANNELS> intrig_trig0;
 
     rack::dsp::Timer light_timer;
 
@@ -757,7 +135,7 @@ struct Reflux: Module {
     }
 
     auto current_clip() -> AudioClip& {
-        return clips.at((IdxType)selected_sample);
+        return clips.at((IdxType)selected_clip);
     }
 
     auto current_slice() -> AudioSlice* {
@@ -776,6 +154,19 @@ struct Reflux: Module {
         return this->directory_;
     }
 
+    auto can_load() -> bool {
+        if (!current_clip().has_data()) {
+            return true;
+        }
+
+        if (current_clip().can_clear) {
+            current_clip().clear();
+        } else {
+            current_clip().can_clear = true;
+        }
+        return false;
+    }
+
     auto load_file(std::string filepath) -> bool {
         const bool loaded = current_clip().load_file(filepath);
         if (loaded) {
@@ -785,8 +176,8 @@ struct Reflux: Module {
     }
 
     auto can_save() -> bool {
-        if (current_clip().is_recording) {
-            current_clip().toggle_recording();
+        if (!current_clip().has_recorded) {
+            selected_clip = ((IdxType)selected_clip.value + 1) % NUM_CLIPS;
             return false;
         }
         return true;
@@ -826,6 +217,12 @@ struct Reflux: Module {
         }
 
         switch (param_id) {
+            case PARAM_SELECTED_CLIP: {
+                delta *= 4;
+                max_value = NUM_CLIPS - 1;
+                value = &selected_clip;
+                break;
+            }
             case PARAM_CLIP_START:
                 value = &current_clip().start_head;
                 break;
@@ -835,7 +232,7 @@ struct Reflux: Module {
             case PARAM_CLIP_WRITE:
                 value = &current_clip().write_head;
                 // write head is allowed to be 1 frame past the end
-                max_value += 1.0;  
+                max_value += 1.0;
                 break;
             case PARAM_CLIP_STOP:
                 value = &current_clip().stop_head;
@@ -890,20 +287,64 @@ struct Reflux: Module {
     }
 
     void process_read_input_audio(const ProcessArgs& args) {
-        // for (IdxType i = 0; i < NUM_CLIPS; i++) {
-        if (clips.at(selected_sample).is_recording) {
-            //if (i == selected_sample) {
-            double data[2];
-            data[0] = getInput(INPUT_AUDIOL).getVoltage();
-            data[1] = getInput(INPUT_AUDIOR).getVoltage();
-            AudioClip::WriteArgs wargs;
-            wargs.delta = args.sampleTime;
-            current_clip().write_frame(data, wargs);
-            //} else {
-            //    clips.at(i).is_recording = false;
-            //}
+        for (IdxType i = 0; i < NUM_CLIPS; i++) {
+            if (clips.at(i).is_recording) {
+                if (i == selected_clip) {
+                    double data[2];
+                    data[0] = getInput(INPUT_AUDIOL).getVoltage();
+                    data[1] = getInput(INPUT_AUDIOR).getVoltage();
+                    AudioClip::WriteArgs wargs;
+                    wargs.delta = args.sampleTime;
+                    current_clip().write_frame(data, wargs);
+                } else {
+                    clips.at(i).is_recording = false;
+                }
+            }
         }
-        //}
+    }
+
+    void process_read_input_cv(const ProcessArgs& args) {
+        float* cv0s = inputs[INPUT_CV0].getVoltages();
+        SelectionMode mode = SelectionMode::MIDI_WRAP;
+
+        for (int i = 0; i < PORT_MAX_CHANNELS; i++) {
+            switch (cvtrig0_target) {
+                case InTrigTarget::INTRIG_TARGET_CLIP:
+                    selected_clip_cv[i] = select_idx_by_cv(cv0s[i], mode, clips.size() - 1);
+                    break;
+                case InTrigTarget::INTRIG_TARGET_SLICE:
+                    if (slices.size() > 0) {
+                        selected_slice_cv[i] = select_idx_by_cv(cv0s[i], mode, slices.size() - 1);
+                    }
+                    break;
+            }
+        }
+    }
+
+    void process_read_input_trigs(const ProcessArgs& args) {
+        bool use_cv0 = inputs[INPUT_CV0].isConnected();
+        for (int i = 0; i < PORT_MAX_CHANNELS; i++) {
+            if (intrig_trig0[i].process(inputs[INPUT_TRIGGER0].getVoltage(i) > 0.0)) {
+                switch (cvtrig0_target) {
+                    case InTrigTarget::INTRIG_TARGET_CLIP: {
+                        const int clip_idx = use_cv0 ? (int)selected_clip_cv[i] : (int)selected_clip;
+                        clips[clip_idx].start_playing();
+                        if (global_follow)
+                            selected_clip = clip_idx;
+                        break;
+                    }
+                    case InTrigTarget::INTRIG_TARGET_SLICE: {
+                        if (slices.size() > 0) {
+                            const int slice_idx = use_cv0 ? (int)selected_slice_cv[i] : (int)selected_slice;
+                            slices[slice_idx]->start_playing();
+                            if (global_follow)
+                                selected_slice = slice_idx;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     void compute_output(const ProcessArgs& args) {
@@ -924,8 +365,13 @@ struct Reflux: Module {
             if (slices.at(i)->is_playing) {
                 wavefroms_playing += 1;
                 auto frame = slices.at(i)->read_frame();
+                if (frame.empty()) {
+                    continue;
+                }
                 audio_out_l += frame[0];
-                audio_out_r += frame[1];
+                if (frame.size() > 1) {
+                    audio_out_r += frame[1];
+                }
             }
         }
 
@@ -951,8 +397,19 @@ struct Reflux: Module {
     }
 
     void process(const ProcessArgs& args) override {
-        // update the select sample
-        selected_sample = (int)getParam(PARAM_SELECTED_CLIP).getValue();
+        // listen for global trig0 target button event
+        if (btntrig_global_trig0_taget.process(params[PARAM_GLOBAL_TRIG0_TARGET].getValue() > 0.0)) {
+            cvtrig0_target =
+                cvtrig0_target == (INTRIG_TARGET_CLIP && current_slice()) ? INTRIG_TARGET_SLICE : INTRIG_TARGET_CLIP;
+        }
+
+        // listen for global follow button event
+        if (btntrig_global_follow.process(params[PARAM_GLOBAL_FOLLOW].getValue() > 0.0)) {
+            global_follow = !global_follow;
+        }
+
+        // read cv input to select sample
+        process_read_input_cv(args);
 
         // read audio input to current sample
         process_read_input_audio(args);
@@ -962,12 +419,12 @@ struct Reflux: Module {
             current_clip().toggle_recording();
         }
 
-        // listen for sample play button event
+        // listen for clip play button event
         if (btntrig_clip_play.process(params[PARAM_CLIP_PLAY].getValue() > 0.0)) {
             current_clip().start_playing();
         }
 
-        // listen for sample pause button event
+        // listen for clip pause button event
         if (btntrig_clip_pause.process(params[PARAM_CLIP_PAUSE_MAKE_SLICE].getValue() > 0.0)) {
             if (current_clip().is_playing) {
                 current_clip().toggle_playing();
@@ -980,6 +437,7 @@ struct Reflux: Module {
             }
         }
 
+        // listen for clip delete button event
         if (btntrig_slice_play.process(params[PARAM_SLICE_PLAY].getValue() > 0.0)) {
             if (current_slice()) {
                 current_slice()->start_playing();
@@ -1018,14 +476,20 @@ struct Reflux: Module {
             }
         }
 
+        process_read_input_trigs(args);
+
         // update lights
         if (light_timer.process(args.sampleTime) > rage::UI_update_time) {
             light_timer.reset();
             if (current_slice()) {
                 lights[LIGHT_SLICE_PLAY].setSmoothBrightness(current_slice()->is_playing ? .5f : 0.0f, UI_update_time);
             }
-            lights[LIGHT_SAMPLE_PLAY].setSmoothBrightness(current_clip().is_playing ? .5f : 0.0f, UI_update_time);
-            lights[LIGHT_SAMPLE_RECORD].setSmoothBrightness(current_clip().is_recording ? .5f : 0.0f, UI_update_time);
+            lights[LIGHT_CLIP_RECORD].setSmoothBrightness(current_clip().is_recording ? .5f : 0.0f, UI_update_time);
+            lights[LIGHT_CLIP_CLEAR].setSmoothBrightness(current_clip().can_clear ? .5f : 0.0f, UI_update_time);
+            lights[LIGHT_CLIP_PLAY].setSmoothBrightness(current_clip().is_playing ? .5f : 0.0f, UI_update_time);
+            bool trig0_target_slice = cvtrig0_target == INTRIG_TARGET_SLICE;
+            lights[LIGHT_GLOBAL_TRIG0_TARGET].setSmoothBrightness(trig0_target_slice ? .5f : 0.0f, UI_update_time);
+            lights[LIGHT_GLOBAL_FOLLOW].setSmoothBrightness(global_follow ? .5f : 0.0f, UI_update_time);
         }
 
         // process_clips
@@ -1034,7 +498,7 @@ struct Reflux: Module {
         // compute_output
         compute_output(args);
     }
-    /*
+
     json_t* dataToJson() override {
         json_t* json_root = json_object();
         json_t* json_clips = json_array();
@@ -1050,6 +514,7 @@ struct Reflux: Module {
 
         json_object_set_new(json_root, "clips", json_clips);
         json_object_set_new(json_root, "slices", json_slices);
+        json_object_set_new(json_root, "cvtrig0_target", json_integer((int)cvtrig0_target));
 
         return json_root;
     }
@@ -1066,15 +531,14 @@ struct Reflux: Module {
         }
 
         json_array_foreach(json_slices, idx, json_obj) {
-            const json_int_t clip_idx = json_integer_value(json_object_get(json_obj, "clip_idx"));
-            auto slice = AudioSlice::create(clips.at(clip_idx));
+            const double clip_idx = json_real_value(json_object_get(json_obj, "clip_idx"));
+            auto slice = AudioSlice::create(clips.at(clip_idx), &slice_dbb);
             slice->load_json(json_obj);
             slices.push_back(slice);
         }
+        cvtrig0_target = (Reflux::InTrigTarget)json_integer_value(json_object_get(root, "cvtrig0_target"));
     }
-    */
 
-    /*
     void onAdd(const AddEvent& event) override {
         for (IdxType i = 0; i < clips.size(); i++) {
             Optional<std::string> path;
@@ -1084,9 +548,10 @@ struct Reflux: Module {
             } else if (clips.at(i).has_loaded) {
                 path.set_value(clips.at(i).file_path);
             }
-            if (path.some() && system::isFile(path.value())) {
+            if (path.some()) {
                 auto pathv = path.value();
-                clips.at(i).load_file(pathv);
+                if (system::isFile(pathv))
+                    clips.at(i).load_file(pathv);
             }
         }
     }
@@ -1098,13 +563,12 @@ struct Reflux: Module {
                 std::string filename = fmt::format("clip_{}.wav", i);
                 path.set_value(system::join(createPatchStorageDirectory(), filename));
             }
-            if (path.some() && system::isFile(path.value())) {
+            if (path.some()) {
                 auto pathv = path.value();
                 clips.at(i).save_file(pathv);
             }
         }
     }
-    */
 
     void onReset() override {
         slices = {};
@@ -1135,7 +599,11 @@ const ColorSchemeMap default_colors = {
     {"release", nvgRGB(155, 77, 202)},
     {"read", nvgRGB(30, 144, 255)},
     {"write", nvgRGB(230, 0, 115)},
-    {"region", nvgRGB(56, 189, 153)}};
+    {"region", nvgRGB(56, 189, 153)},
+    {"borders", nvgRGB(56, 189, 153)},
+    {"background", nvgRGB(64, 64, 64)},
+    {"text", nvgRGBA(255, 255, 255, 90)},
+};
 
 template<class WaveformType>
 struct WaveformDisplayWidget: TransparentWidget {
@@ -1192,9 +660,9 @@ struct WaveformDisplayWidget: TransparentWidget {
 
     void drawLayer(const DrawArgs& args, int layer) override {
         const float title_height = 10;
-        const auto color_mint = nvgRGB(56, 189, 153);
-        const auto color_charcoal = nvgRGB(64, 64, 64);
-        const auto color_white = nvgRGBA(255, 255, 255, 90);
+        const auto color_borders = default_colors.at("borders");
+        const auto color_bg = default_colors.at("background");
+        const auto color_txt = default_colors.at("text");
 
         if ((bool)module) {
             waveform = module->get_current_waveform<WaveformType>();
@@ -1212,21 +680,21 @@ struct WaveformDisplayWidget: TransparentWidget {
                     info_rect = result.B;
                 }
 
-                draw_rect(args, color_charcoal, local_box, true);
-                draw_rect(args, color_mint, title_rect);
-                draw_rect(args, color_mint, info_rect);
+                draw_rect(args, color_bg, local_box, true);
+                draw_rect(args, color_borders, title_rect);
+                draw_rect(args, color_borders, info_rect);
 
                 // Zero Line
-                draw_h_line(args, color_mint, waveform_rect, 0.5);
+                draw_h_line(args, color_borders, waveform_rect, 0.5);
 
                 if (waveform) {
                     // Text
-                    draw_text(args, color_mint, title_rect, waveform->get_text_title());
-                    draw_text(args, color_mint, info_rect, waveform->get_text_info());
+                    draw_text(args, color_borders, title_rect, waveform->get_text_title());
+                    draw_text(args, color_borders, info_rect, waveform->get_text_info());
 
                     if (waveform->has_data()) {
                         // Waveform
-                        draw_waveform(args, color_white, waveform_rect);
+                        draw_waveform(args, color_txt, waveform_rect);
 
                         // Regions
                         for (Region& region : waveform->get_regions()) {
@@ -1245,10 +713,29 @@ struct WaveformDisplayWidget: TransparentWidget {
                     }
                 }
 
-                draw_rect(args, color_mint, waveform_rect);
+                draw_rect(args, color_borders, waveform_rect);
             }
         }
         Widget::drawLayer(args, layer);
+    }
+};
+
+struct TextDisplayWidget: TransparentWidget {
+    Reflux* module {nullptr};
+    std::string text;
+    std::function<std::string()> get_txt;
+
+    TextDisplayWidget(std::function<std::string()> get_txt) : TransparentWidget(), get_txt(get_txt) {}
+
+    void drawLayer(const DrawArgs& args, int layer) override {
+        const auto color_txt = default_colors.at("text");
+        const auto color_borders = default_colors.at("borders");
+        const Rect text_rect = Rect(Vec(0), box.size);
+        if (layer == 0) {
+            text = get_txt();
+            draw_rect(args, color_borders, text_rect);
+            draw_text(args, color_txt, Rect(Vec(0), box.size), text);
+        }
     }
 };
 
@@ -1297,15 +784,23 @@ struct RefluxWidget: ModuleWidget {
         display->module = dynamic_cast<Reflux*>(module);
         addChild(display);
     }
+
+    void add_info_display(Vec pos, std::function<std::string()> get_text) {
+        auto* display = new TextDisplayWidget(get_text);
+        display->box.pos = pos;
+        addChild(display);
+    }
+
     template<class T>
     using RSBLed = RubberSmallButtonLed<T>;
 
     explicit RefluxWidget(Reflux* module) {
         const auto slice_group_pos = Vec(30, 110);
-        const auto slice_group_knobs = 5;
         const auto clip_group_pos = Vec(30, 205);
 
         setModule(module);
+
+        // Panel Background
         setPanel(APP->window->loadSvg(asset::plugin(pluginInstance, "res/Reflux.svg")));
 
         // Screws
@@ -1315,26 +810,42 @@ struct RefluxWidget: ModuleWidget {
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
         // Audio Slice
-        add_waveform_group<AudioSlice>(slice_group_pos, {Reflux::PARAM_SELECTED_SLICE, slice_group_knobs});
+        add_waveform_group<AudioSlice>(slice_group_pos, {Reflux::PARAM_SELECTED_SLICE, 5});
         add_widget_grid(WGArgs().pos(Vec(185, 110)).group({Reflux::PARAM_SLICE_SHIFTL, 6}).columns(3));
+        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(185, 150), module, Reflux::LIGHT_SLICE_PLAY));
 
         // Audio Clip
         const WidgetTypeMap btns = {{1, WTSaveButton}, {2, WTLoadButton}};
-        add_waveform_group<AudioClip>(clip_group_pos, {Reflux::PARAM_SELECTED_CLIP, 5}, {{0, WTSnapKnob}});
+        add_waveform_group<AudioClip>(clip_group_pos, {Reflux::PARAM_SELECTED_CLIP, 5});
         add_widget_grid(WGArgs().pos(Vec(185, 205)).group({Reflux::PARAM_CLIP_RECORD, 6}).columns(3).custom_types(btns)
         );
+        addChild(createLightCentered<RSBLed<RedLight>>(Vec(185, 205), module, Reflux::LIGHT_CLIP_RECORD));
+        addChild(createLightCentered<RSBLed<RedLight>>(Vec(255, 205), module, Reflux::LIGHT_CLIP_CLEAR));
+        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(185, 245), module, Reflux::LIGHT_CLIP_PLAY));
 
-        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(185, 150), module, Reflux::LIGHT_SLICE_PLAY));
-        addChild(createLightCentered<RSBLed<RedLight>>(Vec(185, 205), module, Reflux::LIGHT_SAMPLE_RECORD));
-        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(185, 245), module, Reflux::LIGHT_SAMPLE_PLAY));
-
+        // Global
+        add_widget_grid(WGArgs().pos(Vec(170, 300)).group({Reflux::PARAM_GLOBAL_TRIG0_TARGET, 2}).columns(3));
+        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(170, 300), module, Reflux::LIGHT_GLOBAL_TRIG0_TARGET));
+        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(205, 300), module, Reflux::LIGHT_GLOBAL_FOLLOW));
+        /*
+        if (module) {
+            add_info_display(Vec(170, 400), [module]() {
+                return fmt::format("Clip {}/{}", module->selected_clip_cv.value + 1, 12);
+            });
+            add_info_display(Vec(170, 450), [module]() {
+                return fmt::format("Slice {}/{}", module->selected_slice_cv. + 1, module->slices.size());
+            });
+        }
+        */
+        // Inputs
         add_widget_grid(WGArgs()
                             .pos(mm2px(Vec(10, 101)))
-                            .group({Reflux::INPUT_SELECT_CV, 8})
+                            .group({Reflux::INPUT_TRIGGER0, 8})
                             .columns(4)
                             .default_type(WidgetType::WTInputPort)
                             .spacing(mm2px(Vec(10, 11.5))));
 
+        // Outputs
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(103, 10)), module, Reflux::OUTPUT_AUDIOL));
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(113, 10)), module, Reflux::OUTPUT_AUDIOR));
         addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(108, 18)), module, Reflux::OUTPUT_EOS));

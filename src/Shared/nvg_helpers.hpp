@@ -1,4 +1,4 @@
-
+#pragma once
 #include "../plugin.hpp" 
 
 using  DrawArgs = Widget::DrawArgs;

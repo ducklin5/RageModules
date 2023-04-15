@@ -1,4 +1,7 @@
+#pragma once
 #include "make_builder.hpp"
+#include <math.h>
+#include "math.hpp"
 
 // ***********
 // OPTIONAL
@@ -148,4 +151,24 @@ std::string random_string( size_t length )
     std::string str(length,0);
     std::generate_n( str.begin(), length, randchar );
     return str;
+}
+
+// ********
+// select an idx using cv
+// ********
+enum SelectionMode {
+    MIDI,
+    MIDI_WRAP,
+    FRACTION,
+};
+
+unsigned int select_idx_by_cv(double cv, SelectionMode mode, unsigned int max_idx, double max_cv = 10.0) {
+    switch(mode) {
+        case SelectionMode::MIDI:
+            return (unsigned int) clamp(std::round(cv * 12.0), 0.0 , max_idx);
+        case SelectionMode::MIDI_WRAP:
+            return (unsigned int)std::round(cv * 12.0) % (max_idx + 1);
+        case SelectionMode::FRACTION:
+            return (unsigned int)std::round( max_idx * clamp(cv, 0.0, max_cv) / max_cv );
+    }
 }

@@ -115,22 +115,24 @@ struct LoadButton: RubberSmallButton {
         ParamQuantity* paramQuantity = getParamQuantity();
         ParentModule* module = static_cast<ParentModule*>(paramQuantity->module);
         if (module) {
-            std::string dir = module->get_last_directory();
-            std::string filename;
+            if (module->can_load()) {
+                std::string dir = module->get_last_directory();
+                std::string filename;
 
-            if (dir == "") {
-                dir = asset::user("./Music/");
-                filename = "Untitled";
-            } else {
-                filename = system::getFilename("Untitled");
-            }
+                if (dir == "") {
+                    dir = asset::user("./Music/");
+                    filename = "Untitled";
+                } else {
+                    filename = system::getFilename("Untitled");
+                }
 
-            char* path = osdialog_file(OSDIALOG_OPEN, dir.c_str(), filename.c_str(), NULL);
-            std::cout << "Os Dialog selected: " << path << "\n";
+                char* path = osdialog_file(OSDIALOG_OPEN, dir.c_str(), filename.c_str(), NULL);
+                std::cout << "Os Dialog selected: " << path << "\n";
 
-            if (path) {
-                module->load_file(std::string(path));
-                free(path);
+                if (path) {
+                    module->load_file(std::string(path));
+                    free(path);
+                }
             }
         }
 
@@ -155,12 +157,17 @@ struct SaveButton: RubberSmallButton {
                     filename = system::getFilename("Untitled");
                 }
 
-                char* path = osdialog_file(OSDIALOG_SAVE, dir.c_str(), filename.c_str(), NULL);
+                char* path_raw = osdialog_file(OSDIALOG_SAVE, dir.c_str(), filename.c_str(), NULL);
+                std::string path(path_raw);
+                free(path_raw);
+
                 std::cout << "Os Dialog selected: " << path << "\n";
 
-                if (path) {
-                    module->save_file(std::string(path));
-                    free(path);
+                if (path.size() > 0) {
+                    if (system::getExtension(path) == "") {
+                        path += ".wav";
+                    }
+                    module->save_file(path);
                 }
             }
         }
@@ -169,14 +176,7 @@ struct SaveButton: RubberSmallButton {
     }
 };
 
-enum WidgetType {
-    WTRegularButton,
-    WTLoadButton,
-    WTSaveButton,
-    WTSnapKnob,
-    WTOmniKnob,
-    WTInputPort
-};
+enum WidgetType { WTRegularButton, WTLoadButton, WTSaveButton, WTSnapKnob, WTOmniKnob, WTInputPort };
 
 template<class ParentModule>
 Widget* create_centered_widget(const WidgetType wtype, Vec pos, Module* module, int param_id) {
