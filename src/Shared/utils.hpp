@@ -33,6 +33,19 @@ struct Optional {
     auto some() -> bool {
         return m_some;
     }
+    
+    auto operator=(const T& new_value) -> Optional<T>& {
+        this->m_value = new_value;
+        this->m_some = true;
+        return *this;
+    }
+
+    auto operator=(const Optional<T>& new_obj) -> Optional<T>& {
+        this->m_value = new_obj.m_value;
+        this->m_some = new_obj.m_some;
+        return *this;
+    }
+
 };
 
 template<typename T>

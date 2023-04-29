@@ -160,3 +160,9 @@ struct Region {
 
     Region(float begin, float end, const std::string& tag = "region") : begin(begin), end(end), tag(tag) {}
 };
+
+struct PlaybackProfile {
+    Eventful<double> speed = 1.l;
+    Eventful<double> inertia = 0.l;
+    Eventful<double> pitch = 0.l;
+};

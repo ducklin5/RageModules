@@ -176,7 +176,7 @@ struct SaveButton: RubberSmallButton {
     }
 };
 
-enum WidgetType { WTRegularButton, WTLoadButton, WTSaveButton, WTSnapKnob, WTOmniKnob, WTInputPort };
+enum WidgetType { WTRegularButton, WTLoadButton, WTSaveButton, WTSnapKnob, WTOmniKnob, WTInputPort, WTRGBLight };
 
 template<class ParentModule>
 Widget* create_centered_widget(const WidgetType wtype, Vec pos, Module* module, int param_id) {
@@ -193,6 +193,8 @@ Widget* create_centered_widget(const WidgetType wtype, Vec pos, Module* module, 
             return createParamCentered<RoundSmallGrayOmniKnob<ParentModule>>(pos, module, param_id);
         case WTInputPort:
             return createInputCentered<PJ301MPort>(pos, module, param_id);
+        case WTRGBLight:
+            return createLightCentered<RubberSmallButtonLed<RedGreenBlueLight>>(pos, module, param_id);
     }
     return nullptr;
 }

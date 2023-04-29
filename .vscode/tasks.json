@@ -5,7 +5,7 @@
   "tasks": [
     { "label": "Build application and add to Rack plugin folder",
       "type": "shell",
-      "command": "make install -j4",
+      "command": "make final -j4",
       "options": {
         "cwd": "${workspaceRoot}",
         "env": {
@@ -40,7 +40,7 @@
     },
     { "label": "Build application without stripping symbols and add to Rack plugin folder",
       "type": "shell",
-      "command": "make ARGS=\"no-strip\" install -j4",
+      "command": "make ARGS=\"no-strip\" final -j4",
       "options": {
         "cwd": "${workspaceRoot}",
         "env": {
@@ -73,7 +73,7 @@
     },
     { "label": "Rebuild and make compile commands",
       "type": "shell",
-      "command": "make clean && intercept-build make ARGS=\"no-strip\" install -j4",
+      "command": "make clean && intercept-build make ARGS=\"no-strip\" final -j4",
       "options": {
         "cwd": "${workspaceRoot}",
         "env": {

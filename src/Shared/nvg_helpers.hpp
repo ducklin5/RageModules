@@ -43,11 +43,10 @@ void draw_v_line(const DrawArgs& args, NVGcolor color, Rect rect, float pos_rati
     draw_line(args, color, rect.pos + Vec(x_line, 0), rect.pos + Vec(x_line, rect.size.y));
 }
 
-void draw_text(const DrawArgs& args, NVGcolor color, Rect rect, std::string text) {
-    nvgFontSize(args.vg, 8);
-    nvgTextLetterSpacing(args.vg, 0);
+void draw_text(const DrawArgs& args, NVGcolor color, Rect rect, std::string text, float size = 8) {
+    nvgFontSize(args.vg, size);
     nvgFillColor(args.vg, color);
-    nvgTextBox(args.vg, rect.pos.x + 2, rect.pos.y + rect.size.y - 2, rect.size.x, text.c_str(), NULL);
+    nvgTextBox(args.vg, rect.pos.x + 2, rect.pos.y + rect.size.y - 2, rect.size.x - 4, text.c_str(), NULL);
 }
 
 struct SplitResult {

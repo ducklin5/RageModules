@@ -1,6 +1,7 @@
 # If RACK_DIR is not defined when calling the Makefile, default to two directories above
 RACK_DIR ?= ../..
 
+SVGO="$(shell yarn bin)/svgo"
 
 # FLAGS will be passed to both the C and C++ compiler
 FLAGS += -O0 -I.
@@ -23,3 +24,13 @@ DISTRIBUTABLES += $(wildcard presets)
 
 # Include the Rack plugin Makefile framework
 include $(RACK_DIR)/plugin.mk
+
+.PHONY: formatSvgs final 
+
+final: formatSvgs
+	+$(MAKE) install
+
+
+formatSvgs:
+	@echo "Formatting resource SVGs"
+	$(SVGO) res/*.svg -o res/*.svg --config=svgo.config.js

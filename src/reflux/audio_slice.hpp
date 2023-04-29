@@ -38,6 +38,8 @@ struct AudioSlice {
 
     DisplayBufferBuilder* display_buffer_builder;
 
+    PlaybackProfile playback_profile;
+
     static std::shared_ptr<AudioSlice> create(AudioClip& clip, DisplayBufferBuilder* dbb) {
         return std::make_shared<AudioSlice>(clip, dbb);
     }
@@ -65,7 +67,7 @@ struct AudioSlice {
     }
 
     void start_playing() {
-        this->read = start;
+        this->read = playback_profile.speed > 0 ? start : stop;
         this->is_playing = true;
     }
 
@@ -85,17 +87,29 @@ struct AudioSlice {
 
     auto read_frame() -> std::vector<double> {
         auto num_channels = m_clip.num_channels;
+        auto delta = playback_profile.speed;
         auto data = std::vector<double>(num_channels);
+        
+        bool is_out_of_bounds = read > stop || read < start;
 
-        if (!is_playing || read >= stop) {
-            read = start;
+        if (!is_playing || is_out_of_bounds) {
+            read = delta > 0 ? start: stop;
             is_playing = false;
             return data;
         }
+
         for (IdxType channel_idx = 0; channel_idx < num_channels; channel_idx++) {
-            data[channel_idx] = get_sample(channel_idx, read);
+            auto result = delta_adjust(read, delta);
+            auto p = result.more == result.less ? 0.0
+                : (result.actual - result.less) / (result.more - result.less);
+
+            auto less_sample = get_sample(channel_idx, result.less);
+            auto more_sample = get_sample(channel_idx, result.more);
+
+            data[channel_idx] = less_sample + (more_sample - less_sample) * p;
         }
-        read += 1.0;
+
+        read += delta;
 
         return data;
     }

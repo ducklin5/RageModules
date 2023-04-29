@@ -50,6 +50,7 @@ struct AudioClip {
     std::vector<StoredConsumer> consumers;
     rack::dsp::Timer write_timer;
     DisplayBufferBuilder* display_buffer_builder = nullptr;
+    PlaybackProfile playback_profile;
 
     AudioClip() : file_path("Unsaved.***") {
         this->update_display_data();
@@ -226,7 +227,7 @@ struct AudioClip {
 
     void start_playing() {
         if (has_data()) {
-            this->read_head = start_head;
+            this->read_head = playback_profile.speed > 0 ? start_head: stop_head;
             this->is_playing = true;
             this->can_clear = false;
         }
@@ -245,19 +246,30 @@ struct AudioClip {
     }
 
     auto read_frame() -> std::vector<double> {
+        auto delta = playback_profile.speed;
         auto data = std::vector<double>(num_channels);
+        
+        bool is_out_of_bounds = read_head.value > stop_head.value
+            || read_head.value < start_head.value;
 
-        if (!is_playing || read_head >= stop_head) {
-            read_head = start_head;
+        if (!is_playing || is_out_of_bounds) {
+            read_head = delta > 0 ? start_head: stop_head;
             is_playing = false;
             return data;
         }
 
         for (IdxType channel_idx = 0; channel_idx < num_channels; channel_idx++) {
-            data[channel_idx] = get_sample(channel_idx, read_head);
+            auto result = delta_adjust(read_head, delta);
+            auto p = result.more == result.less ? 0.0
+                : (result.actual - result.less) / (result.more - result.less);
+
+            auto less_sample = get_sample(channel_idx, result.less);
+            auto more_sample = get_sample(channel_idx, result.more);
+
+            data[channel_idx] = less_sample + (more_sample - less_sample) * p;
         }
 
-        read_head.value += 1.0;
+        read_head.value += delta;
 
         return data;
     }

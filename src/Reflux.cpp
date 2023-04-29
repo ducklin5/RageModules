@@ -24,6 +24,7 @@
 #include "src/shared/components.hpp"
 #include "src/shared/make_builder.hpp"
 #include "src/shared/nvg_helpers.hpp"
+#include "src/shared/resources.hpp"
 #include "src/shared/utils.hpp"
 
 // NOLINTNEXTLINE (google-build-using-namespace)
@@ -31,6 +32,12 @@ using namespace rage;
 
 struct Reflux: Module {
     enum ParamIds {
+        // Playback
+        PARAM_PLAYBACK_TARGET,
+        PARAM_PLAYBACK_SPEED,
+        PARAM_PLAYBACK_INERTIA,
+        PARAM_PLAYBACK_PITCH,
+
         // Slice Knobs
         PARAM_SELECTED_SLICE,
         PARAM_SLICE_START,
@@ -62,8 +69,14 @@ struct Reflux: Module {
         PARAM_CLIP_AUTO_SLICE,
 
         // Global
+        PARAM_GLOBAL_CV0_TARGET,
+        PARAM_GLOBAL_CV1_TARGET,
+        PARAM_GLOBAL_CV2_TARGET,
         PARAM_GLOBAL_TRIG0_TARGET,
-        PARAM_GLOBAL_FOLLOW,
+        PARAM_GLOBAL_CV_MODE,
+        PARAM_GLOBAL_TRIG_MODE,
+        PARAM_GLOBAL_CV_FOLLOW,
+        PARAM_GLOBAL_TRIG1_TARGET,
         NUM_PARAMS
     };
 
@@ -83,19 +96,32 @@ struct Reflux: Module {
         NUM_INPUTS
     };
 
-    enum OutputIds { OUTPUT_AUDIOL, OUTPUT_AUDIOR, OUTPUT_BOS, OUTPUT_EOS, NUM_OUTPUTS };
+    enum OutputIds { OUTPUT_AUDIOL, OUTPUT_AUDIOR, OUTPUT_EOC, OUTPUT_EOS, NUM_OUTPUTS };
 
     enum LightIds {
         LIGHT_SLICE_PLAY,
         LIGHT_CLIP_RECORD,
         LIGHT_CLIP_PLAY,
         LIGHT_CLIP_CLEAR,
-        LIGHT_GLOBAL_TRIG0_TARGET,
-        LIGHT_GLOBAL_FOLLOW,
+
+        ENUMS(LIGHT_GLOBAL_CV0_TARGET, 3),
+        ENUMS(LIGHT_GLOBAL_CV1_TARGET, 3),
+        ENUMS(LIGHT_GLOBAL_CV2_TARGET, 3),
+        ENUMS(LIGHT_GLOBAL_TRIG0_TARGET, 3),
+        ENUMS(LIGHT_GLOBAL_CV_MODE, 3),
+        ENUMS(LIGHT_GLOBAL_TRIG_MODE, 3),
+        ENUMS(LIGHT_GLOBAL_CV_FOLLOW, 3),
+        ENUMS(LIGHT_GLOBAL_TRIG1_TARGET, 3),
+
+        ENUMS(LIGHT_PLAYBACK_TARGET,3),
+
         NUM_LIGHTS
     };
 
-    enum InTrigTarget { INTRIG_TARGET_CLIP, INTRIG_TARGET_SLICE };
+    enum InTrigMode { INTRIG_MODE_GATE, INTRIG_MODE_TRIGGER, INTRIG_MODE_TOGGLE };
+    enum InTrigTarget { INTRIG_PLAY_CLIP, INTRIG_PLAY_SLICE };
+    enum InCVTarget { INCV_SELECT_CLIP, INCV_SELECT_SLICE, INCV_SLICE_SPEED };
+    enum PlaybackPanelTarget { PLAYBACK_TARGET_CLIP, PLAYBACK_TARGET_SLICE, NUM_TARGETS};
 
     static const int NUM_CLIPS = 12;
     DisplayBufferBuilder slice_dbb;
@@ -104,9 +130,9 @@ struct Reflux: Module {
     std::vector<std::shared_ptr<AudioSlice>> slices {};
     std::string directory_;
 
-    InTrigTarget cvtrig0_target = INTRIG_TARGET_CLIP;
-    InTrigTarget trig1_target = INTRIG_TARGET_CLIP;
-    InTrigTarget trig2_target = INTRIG_TARGET_CLIP;
+    InTrigTarget cvtrig0_target = INTRIG_PLAY_CLIP;
+    InTrigTarget trig1_target = INTRIG_PLAY_CLIP;
+    InTrigTarget trig2_target = INTRIG_PLAY_CLIP;
     bool global_follow = false;
 
     Eventful<double> selected_clip {0};
@@ -120,10 +146,14 @@ struct Reflux: Module {
     BooleanTrigger btntrig_slice_play, btntrig_slice_pause, btntrig_slice_learn;
     BooleanTrigger btntrig_clip_record, btntrig_clip_play, btntrig_clip_pause;
     BooleanTrigger btntrig_global_trig0_taget, btntrig_global_follow;
+    BooleanTrigger btntrig_playback_target;
 
     std::array<BooleanTrigger, PORT_MAX_CHANNELS> intrig_trig0;
 
     rack::dsp::Timer light_timer;
+
+    PlaybackPanelTarget playback_target = PLAYBACK_TARGET_CLIP;
+    std::array<PlaybackProfile, PORT_MAX_CHANNELS> cvtrig_playback_profile;
 
     Reflux() {
         config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
@@ -278,6 +308,18 @@ struct Reflux: Module {
                 max_value = current_slice()->stop;
                 break;
             }
+            case PARAM_PLAYBACK_INERTIA: {
+                value = get_playback_inertia();
+                min_value = -2;
+                max_value = 2;
+                break;
+            }
+            case PARAM_PLAYBACK_SPEED: {
+                value = get_playback_speed();
+                min_value = -2;
+                max_value = 2;
+                break;
+            }
             default:
                 return;
         }
@@ -309,10 +351,10 @@ struct Reflux: Module {
 
         for (int i = 0; i < PORT_MAX_CHANNELS; i++) {
             switch (cvtrig0_target) {
-                case InTrigTarget::INTRIG_TARGET_CLIP:
+                case InTrigTarget::INTRIG_PLAY_CLIP:
                     selected_clip_cv[i] = select_idx_by_cv(cv0s[i], mode, clips.size() - 1);
                     break;
-                case InTrigTarget::INTRIG_TARGET_SLICE:
+                case InTrigTarget::INTRIG_PLAY_SLICE:
                     if (slices.size() > 0) {
                         selected_slice_cv[i] = select_idx_by_cv(cv0s[i], mode, slices.size() - 1);
                     }
@@ -326,14 +368,14 @@ struct Reflux: Module {
         for (int i = 0; i < PORT_MAX_CHANNELS; i++) {
             if (intrig_trig0[i].process(inputs[INPUT_TRIGGER0].getVoltage(i) > 0.0)) {
                 switch (cvtrig0_target) {
-                    case InTrigTarget::INTRIG_TARGET_CLIP: {
+                    case InTrigTarget::INTRIG_PLAY_CLIP: {
                         const int clip_idx = use_cv0 ? (int)selected_clip_cv[i] : (int)selected_clip;
                         clips[clip_idx].start_playing();
                         if (global_follow)
                             selected_clip = clip_idx;
                         break;
                     }
-                    case InTrigTarget::INTRIG_TARGET_SLICE: {
+                    case InTrigTarget::INTRIG_PLAY_SLICE: {
                         if (slices.size() > 0) {
                             const int slice_idx = use_cv0 ? (int)selected_slice_cv[i] : (int)selected_slice;
                             slices[slice_idx]->start_playing();
@@ -396,15 +438,28 @@ struct Reflux: Module {
         }
     }
 
+    void set_rgb_light(int light_id, NVGcolor color) {
+        lights[light_id + 0].setBrightness(color.r);
+        lights[light_id + 1].setBrightness(color.g);
+        lights[light_id + 2].setBrightness(color.b);
+    }
+
     void process(const ProcessArgs& args) override {
+        //listen for playback target event button
+        if (btntrig_playback_target.process(params[PARAM_PLAYBACK_TARGET].getValue() > 0.0)) {
+            playback_target = playback_target == PlaybackPanelTarget::PLAYBACK_TARGET_CLIP && current_slice()
+                                  ? PlaybackPanelTarget::PLAYBACK_TARGET_SLICE
+                                  : PlaybackPanelTarget::PLAYBACK_TARGET_CLIP;
+        }
+
         // listen for global trig0 target button event
         if (btntrig_global_trig0_taget.process(params[PARAM_GLOBAL_TRIG0_TARGET].getValue() > 0.0)) {
             cvtrig0_target =
-                cvtrig0_target == (INTRIG_TARGET_CLIP && current_slice()) ? INTRIG_TARGET_SLICE : INTRIG_TARGET_CLIP;
+                cvtrig0_target == (INTRIG_PLAY_CLIP && current_slice()) ? INTRIG_PLAY_SLICE : INTRIG_PLAY_CLIP;
         }
 
         // listen for global follow button event
-        if (btntrig_global_follow.process(params[PARAM_GLOBAL_FOLLOW].getValue() > 0.0)) {
+        if (btntrig_global_follow.process(params[PARAM_GLOBAL_CV_FOLLOW].getValue() > 0.0)) {
             global_follow = !global_follow;
         }
 
@@ -437,19 +492,21 @@ struct Reflux: Module {
             }
         }
 
-        // listen for clip delete button event
+        // listen for slice play button event
         if (btntrig_slice_play.process(params[PARAM_SLICE_PLAY].getValue() > 0.0)) {
             if (current_slice()) {
                 current_slice()->start_playing();
             }
         }
 
+        // listen for slice pause button event
         if (btntrig_slice_pause.process(params[PARAM_SLICE_PAUSE].getValue() > 0.0)) {
             if (current_slice() && current_slice()->is_playing) {
                 current_slice()->toggle_playing();
             }
         }
 
+        // listen for slice delete button event
         if (btntrig_slice_delete.process(params[PARAM_SLICE_DELETE].getValue() > 0.0)) {
             if (current_slice()) {
                 slices.erase(slices.begin() + selected_slice);
@@ -460,6 +517,7 @@ struct Reflux: Module {
             }
         }
 
+        // listen for slice shift l button event
         if (btntrig_slice_shiftl.process(params[PARAM_SLICE_SHIFTL].getValue() > 0.0)) {
             if (selected_slice - 1 >= 0) {
                 std::swap(slices[selected_slice], slices[selected_slice - 1.0]);
@@ -468,6 +526,7 @@ struct Reflux: Module {
             }
         }
 
+        // listen for slice shift r button event
         if (btntrig_slice_shiftr.process(params[PARAM_SLICE_SHIFTR].getValue() > 0.0)) {
             if (selected_slice + 1.0 < slices.size()) {
                 std::swap(slices[selected_slice], slices[selected_slice + 1.0]);
@@ -476,6 +535,7 @@ struct Reflux: Module {
             }
         }
 
+        // listen for slice shift l button event
         process_read_input_trigs(args);
 
         // update lights
@@ -487,9 +547,17 @@ struct Reflux: Module {
             lights[LIGHT_CLIP_RECORD].setSmoothBrightness(current_clip().is_recording ? .5f : 0.0f, UI_update_time);
             lights[LIGHT_CLIP_CLEAR].setSmoothBrightness(current_clip().can_clear ? .5f : 0.0f, UI_update_time);
             lights[LIGHT_CLIP_PLAY].setSmoothBrightness(current_clip().is_playing ? .5f : 0.0f, UI_update_time);
-            bool trig0_target_slice = cvtrig0_target == INTRIG_TARGET_SLICE;
-            lights[LIGHT_GLOBAL_TRIG0_TARGET].setSmoothBrightness(trig0_target_slice ? .5f : 0.0f, UI_update_time);
-            lights[LIGHT_GLOBAL_FOLLOW].setSmoothBrightness(global_follow ? .5f : 0.0f, UI_update_time);
+            {
+                bool trig0_target_slice = cvtrig0_target == INTRIG_PLAY_SLICE;
+                lights[LIGHT_GLOBAL_TRIG0_TARGET].setSmoothBrightness(trig0_target_slice ? .5f : 0.0f, UI_update_time);
+            }
+            lights[LIGHT_GLOBAL_CV_FOLLOW + 1].setSmoothBrightness(global_follow ? .5f : 0.0f, UI_update_time);
+
+            {
+                float hue = playback_target == PlaybackPanelTarget::PLAYBACK_TARGET_CLIP ? 0.456 : 1.0;
+				NVGcolor color = nvgHSL(hue, 1.0, 0.2);
+                set_rgb_light(LIGHT_PLAYBACK_TARGET, color);
+			}
         }
 
         // process_clips
@@ -578,6 +646,26 @@ struct Reflux: Module {
     void onRandomize() override {
         // TODO
     }
+
+    Eventful<double>* get_playback_inertia() {
+        if (playback_target == Reflux::PlaybackPanelTarget::PLAYBACK_TARGET_SLICE) {
+            if (current_slice())
+                return &current_slice()->playback_profile.inertia;
+        } else {
+            return &current_clip().playback_profile.inertia;
+        }
+        return nullptr;
+    }
+
+    Eventful<double>* get_playback_speed() {
+        if (playback_target == Reflux::PlaybackPanelTarget::PLAYBACK_TARGET_SLICE) {
+            if (current_slice())
+                return &current_slice()->playback_profile.speed;
+        } else {
+            return &current_clip().playback_profile.speed;
+        }
+        return nullptr;
+    }
 };
 
 template<>
@@ -602,6 +690,7 @@ const ColorSchemeMap default_colors = {
     {"region", nvgRGB(56, 189, 153)},
     {"borders", nvgRGB(56, 189, 153)},
     {"background", nvgRGB(64, 64, 64)},
+    {"base_text", nvgRGBA(255, 255, 255, 20)},
     {"text", nvgRGBA(255, 255, 255, 90)},
 };
 
@@ -663,31 +752,29 @@ struct WaveformDisplayWidget: TransparentWidget {
         const auto color_borders = default_colors.at("borders");
         const auto color_bg = default_colors.at("background");
         const auto color_txt = default_colors.at("text");
+        const Rect local_box = Rect(Vec(0), box.size);
+        Rect waveform_rect;
+        Rect title_rect;
+        Rect info_rect;
+        {
+            auto result = split_rect_h(local_box, title_height / local_box.getHeight());
+            auto header_rect = result.A;
+            waveform_rect = result.B;
+            result = split_rect_v(header_rect, 0.6);
+            title_rect = result.A;
+            info_rect = result.B;
+        }
 
+        draw_rect(args, color_bg, local_box, true);
+        draw_rect(args, color_borders, title_rect);
+        draw_rect(args, color_borders, info_rect);
+
+        // Zero Line
+        draw_h_line(args, color_borders, waveform_rect, 0.5);
         if ((bool)module) {
             waveform = module->get_current_waveform<WaveformType>();
-            if (layer == 1) {
-                const Rect local_box = Rect(Vec(0), box.size);
-                Rect waveform_rect;
-                Rect title_rect;
-                Rect info_rect;
-                {
-                    auto result = split_rect_h(local_box, title_height / local_box.getHeight());
-                    auto header_rect = result.A;
-                    waveform_rect = result.B;
-                    result = split_rect_v(header_rect, 0.6);
-                    title_rect = result.A;
-                    info_rect = result.B;
-                }
-
-                draw_rect(args, color_bg, local_box, true);
-                draw_rect(args, color_borders, title_rect);
-                draw_rect(args, color_borders, info_rect);
-
-                // Zero Line
-                draw_h_line(args, color_borders, waveform_rect, 0.5);
-
-                if (waveform) {
+            if (waveform) {
+                if (layer == 1) {
                     // Text
                     draw_text(args, color_borders, title_rect, waveform->get_text_title());
                     draw_text(args, color_borders, info_rect, waveform->get_text_info());
@@ -713,31 +800,53 @@ struct WaveformDisplayWidget: TransparentWidget {
                     }
                 }
 
-                draw_rect(args, color_borders, waveform_rect);
             }
         }
+        draw_rect(args, color_borders, waveform_rect);
         Widget::drawLayer(args, layer);
     }
 };
 
-struct TextDisplayWidget: TransparentWidget {
-    Reflux* module {nullptr};
-    std::string text;
+struct TextBoxProps {
     std::function<std::string()> get_txt;
+    Optional<std::string> font_path;
+    float font_size {9};
+    int align { NVG_ALIGN_RIGHT };
+    int length { 4 };
+};
+MAKE_BUILDER(MK_TextBoxProps, TextBoxProps, get_txt, font_path, font_size, align, length);
 
-    TextDisplayWidget(std::function<std::string()> get_txt) : TransparentWidget(), get_txt(get_txt) {}
+struct TextBoxWidget: TransparentWidget {
+    TextBoxProps props;
+
+    TextBoxWidget(TextBoxProps props) : TransparentWidget(), props(props) {}
 
     void drawLayer(const DrawArgs& args, int layer) override {
-        const auto color_txt = default_colors.at("text");
+        const auto color_base_txt = default_colors.at("base_text");
+        const auto color_txt = default_colors.at("borders");
         const auto color_borders = default_colors.at("borders");
+        const auto color_bg = default_colors.at("background");
         const Rect text_rect = Rect(Vec(0), box.size);
-        if (layer == 0) {
-            text = get_txt();
+        if (layer == 1) {
+            std::string text = props.get_txt();
+            draw_rect(args, color_bg, text_rect, true);
             draw_rect(args, color_borders, text_rect);
-            draw_text(args, color_txt, Rect(Vec(0), box.size), text);
+            if (props.font_path.some()) {
+                std::string font_path_str = props.font_path.value();
+                std::shared_ptr<Font> font = APP->window->loadFont(asset::plugin(pluginInstance, font_path_str));
+                nvgTextAlign(args.vg, props.align);
+                nvgFontFaceId(args.vg, font->handle);
+            }
+            const std::string base_txt = std::string(props.length,  '~' );
+            draw_text(args, color_base_txt, Rect(Vec(0), box.size), base_txt, props.font_size);
+            draw_text(args, color_txt, Rect(Vec(0), box.size), text, props.font_size);
         }
     }
 };
+
+std::string format_amount(double amount, int precision = 2) {
+    return fmt::format("{: .{}f}", amount, precision);
+}
 
 struct RefluxWidget: ModuleWidget {
     struct WidgetIdGroup {
@@ -755,17 +864,30 @@ struct RefluxWidget: ModuleWidget {
         WidgetType default_type = WTRegularButton;
         WidgetTypeMap custom_types = {};
         WidgetCreator create_widget = &create_centered_widget<Reflux>;
+        int id_size = 1;
     };
 
-    MAKE_BUILDER(WGArgs, WidgetGrirdArgs, pos, spacing, columns, group, default_type, custom_types, create_widget);
+    MAKE_BUILDER(
+        WGArgs,
+        WidgetGrirdArgs,
+        pos,
+        spacing,
+        columns,
+        group,
+        default_type,
+        custom_types,
+        create_widget,
+        id_size
+    );
 
     void add_widget_grid(WidgetGrirdArgs args) {
         const int columns = args.columns;
         const Vec spacing = args.spacing;
         const auto custom_types = args.custom_types;
+        const auto id_size = args.id_size;
 
         for (int idx = 0; idx < args.group.count; idx++) {
-            const int param_id = args.group.first_id + idx;
+            const int param_id = args.group.first_id + idx * id_size;
             const Vec pos = args.pos + Vec((float)(idx % columns) * spacing.x, (float)(idx / columns) * spacing.y);
             const WidgetType wtype = ((bool)custom_types.count(idx)) ? custom_types.at(idx) : args.default_type;
             addChild(args.create_widget(wtype, pos, module, param_id));
@@ -779,15 +901,18 @@ struct RefluxWidget: ModuleWidget {
         );
 
         auto* display = new WaveformDisplayWidget<WavefromType>();
-        display->box.pos = pos + Vec(-15, 25);
+        display->box.pos = pos + Vec(-15, 27);
         display->box.size = Vec(150, 38);
         display->module = dynamic_cast<Reflux*>(module);
         addChild(display);
     }
 
     void add_info_display(Vec pos, std::function<std::string()> get_text) {
-        auto* display = new TextDisplayWidget(get_text);
+        auto* display =
+            new TextBoxWidget(MK_TextBoxProps().get_txt(get_text).font_path(std::string(RAGE_FONT_14SEG))
+            );
         display->box.pos = pos;
+        display->box.size = Vec(35, 15);
         addChild(display);
     }
 
@@ -795,9 +920,6 @@ struct RefluxWidget: ModuleWidget {
     using RSBLed = RubberSmallButtonLed<T>;
 
     explicit RefluxWidget(Reflux* module) {
-        const auto slice_group_pos = Vec(30, 110);
-        const auto clip_group_pos = Vec(30, 205);
-
         setModule(module);
 
         // Panel Background
@@ -809,46 +931,66 @@ struct RefluxWidget: ModuleWidget {
         addChild(createWidget<ScrewSilver>(Vec(RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
         addChild(createWidget<ScrewSilver>(Vec(box.size.x - 2 * RACK_GRID_WIDTH, RACK_GRID_HEIGHT - RACK_GRID_WIDTH)));
 
+        // Outputs
+        addOutput(createOutputCentered<PJ301MPort>(Vec(295, 30), module, Reflux::OUTPUT_AUDIOL));
+        addOutput(createOutputCentered<PJ301MPort>(Vec(335, 30), module, Reflux::OUTPUT_AUDIOR));
+        addOutput(createOutputCentered<PJ301MPort>(Vec(315, 50), module, Reflux::OUTPUT_EOS));
+        addOutput(createOutputCentered<PJ301MPort>(Vec(335, 70), module, Reflux::OUTPUT_EOC));
+
+        // Playback Controls
+        addChild(createParamCentered<RubberSmallButton>(Vec(295, 110), module, Reflux::PARAM_PLAYBACK_TARGET));
+        addChild(createLightCentered<RSBLed<RedGreenBlueLight>>(Vec(295, 110), module, Reflux::LIGHT_PLAYBACK_TARGET));
+       
+        addChild(
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 150), module, Reflux::PARAM_PLAYBACK_INERTIA)
+        );
+        add_info_display(Vec(315, 143), [module]() -> std::string {
+            if (!module) return "";
+            return format_amount(*module->get_playback_inertia());
+        });
+
+        addChild(
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 195), module, Reflux::PARAM_PLAYBACK_SPEED)
+        );
+        add_info_display(Vec(315, 188), [module]() -> std::string {
+            if (!module) return "";
+            return format_amount(*module->get_playback_speed());
+        });
+
+        addChild(
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 240), module, Reflux::PARAM_PLAYBACK_PITCH)
+        );
+
         // Audio Slice
-        add_waveform_group<AudioSlice>(slice_group_pos, {Reflux::PARAM_SELECTED_SLICE, 5});
-        add_widget_grid(WGArgs().pos(Vec(185, 110)).group({Reflux::PARAM_SLICE_SHIFTL, 6}).columns(3));
-        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(185, 150), module, Reflux::LIGHT_SLICE_PLAY));
+        add_waveform_group<AudioSlice>(Vec(25, 110), {Reflux::PARAM_SELECTED_SLICE, 5});
+        add_widget_grid(
+            WGArgs().pos(Vec(180, 110)).spacing(Vec(35, 40)).group({Reflux::PARAM_SLICE_SHIFTL, 6}).columns(3)
+        );
+        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(180, 150), module, Reflux::LIGHT_SLICE_PLAY));
 
         // Audio Clip
         const WidgetTypeMap btns = {{1, WTSaveButton}, {2, WTLoadButton}};
-        add_waveform_group<AudioClip>(clip_group_pos, {Reflux::PARAM_SELECTED_CLIP, 5});
-        add_widget_grid(WGArgs().pos(Vec(185, 205)).group({Reflux::PARAM_CLIP_RECORD, 6}).columns(3).custom_types(btns)
+        add_waveform_group<AudioClip>(Vec(25, 205), {Reflux::PARAM_SELECTED_CLIP, 5});
+        add_widget_grid(WGArgs().pos(Vec(180, 205)).group({Reflux::PARAM_CLIP_RECORD, 6}).columns(3).custom_types(btns)
         );
-        addChild(createLightCentered<RSBLed<RedLight>>(Vec(185, 205), module, Reflux::LIGHT_CLIP_RECORD));
-        addChild(createLightCentered<RSBLed<RedLight>>(Vec(255, 205), module, Reflux::LIGHT_CLIP_CLEAR));
-        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(185, 245), module, Reflux::LIGHT_CLIP_PLAY));
+        addChild(createLightCentered<RSBLed<RedLight>>(Vec(180, 205), module, Reflux::LIGHT_CLIP_RECORD));
+        addChild(createLightCentered<RSBLed<RedLight>>(Vec(250, 205), module, Reflux::LIGHT_CLIP_CLEAR));
+        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(180, 245), module, Reflux::LIGHT_CLIP_PLAY));
 
         // Global
-        add_widget_grid(WGArgs().pos(Vec(170, 300)).group({Reflux::PARAM_GLOBAL_TRIG0_TARGET, 2}).columns(3));
-        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(170, 300), module, Reflux::LIGHT_GLOBAL_TRIG0_TARGET));
-        addChild(createLightCentered<RSBLed<BlueLight>>(Vec(205, 300), module, Reflux::LIGHT_GLOBAL_FOLLOW));
-        /*
-        if (module) {
-            add_info_display(Vec(170, 400), [module]() {
-                return fmt::format("Clip {}/{}", module->selected_clip_cv.value + 1, 12);
-            });
-            add_info_display(Vec(170, 450), [module]() {
-                return fmt::format("Slice {}/{}", module->selected_slice_cv. + 1, module->slices.size());
-            });
-        }
-        */
+        auto global_grid = WGArgs().pos(Vec(160, 295)).spacing(Vec(30, 47)).columns(4);
+        add_widget_grid(global_grid.group({Reflux::PARAM_GLOBAL_CV0_TARGET, 8}));
+        add_widget_grid(
+            global_grid.group({Reflux::LIGHT_GLOBAL_CV0_TARGET, 8}).default_type(WidgetType::WTRGBLight).id_size(3)
+        );
+
         // Inputs
         add_widget_grid(WGArgs()
-                            .pos(mm2px(Vec(10, 101)))
+                            .pos(Vec(25, 300))
                             .group({Reflux::INPUT_TRIGGER0, 8})
                             .columns(4)
                             .default_type(WidgetType::WTInputPort)
-                            .spacing(mm2px(Vec(10, 11.5))));
-
-        // Outputs
-        addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(103, 10)), module, Reflux::OUTPUT_AUDIOL));
-        addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(113, 10)), module, Reflux::OUTPUT_AUDIOR));
-        addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(108, 18)), module, Reflux::OUTPUT_EOS));
+                            .spacing(Vec(30, 38)));
     }
 };
 

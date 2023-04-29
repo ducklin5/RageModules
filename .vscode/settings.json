@@ -128,6 +128,10 @@
     "streambuf": "cpp",
     "thread": "cpp",
     "typeinfo": "cpp",
-    "future": "cpp"
+    "future": "cpp",
+    "codecvt": "cpp",
+    "optional": "cpp",
+    "fstream": "cpp",
+    "iomanip": "cpp"
   }
 }
