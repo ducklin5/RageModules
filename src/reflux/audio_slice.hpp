@@ -40,6 +40,13 @@ struct AudioSlice {
 
     PlaybackProfile playback_profile;
 
+    enum LoopType {
+        None,
+        Forward,
+        Sustain,
+        PingPong
+    };
+
     static std::shared_ptr<AudioSlice> create(AudioClip& clip, DisplayBufferBuilder* dbb) {
         return std::make_shared<AudioSlice>(clip, dbb);
     }
@@ -52,7 +59,9 @@ struct AudioSlice {
         attack(Eventful<double>(start, m_handle_range_changed)),
         release(Eventful<double>(stop, m_handle_range_changed)),
         read(start),
-        display_buffer_builder(dbb) {
+        display_buffer_builder(dbb)
+    {
+        playback_profile.init(m_clip.num_channels, m_clip.frame_rate_hz);
         update_data();
     }
 
@@ -74,8 +83,11 @@ struct AudioSlice {
     void toggle_playing() {
         is_playing = !is_playing;
     }
-
+    
     auto get_sample(IdxType channel_idx, IdxType frame_idx) -> double {
+        // Pitch shift
+
+
         const double attack_mult =
             (attack > start && frame_idx < attack) ? (frame_idx - start) / (attack - start) : 1.0;
 
@@ -87,31 +99,21 @@ struct AudioSlice {
 
     auto read_frame() -> std::vector<double> {
         auto num_channels = m_clip.num_channels;
-        auto delta = playback_profile.speed;
-        auto data = std::vector<double>(num_channels);
+
+        if (!is_playing) return std::vector<double>(num_channels, 0.0);
+
+        using namespace std::placeholders;
+        auto result = playback_profile.read_frame(
+            std::bind(get_sample, this, _1, _2),
+            num_channels,
+            read,
+            start,
+            stop
+        );
         
-        bool is_out_of_bounds = read > stop || read < start;
-
-        if (!is_playing || is_out_of_bounds) {
-            read = delta > 0 ? start: stop;
-            is_playing = false;
-            return data;
-        }
-
-        for (IdxType channel_idx = 0; channel_idx < num_channels; channel_idx++) {
-            auto result = delta_adjust(read, delta);
-            auto p = result.more == result.less ? 0.0
-                : (result.actual - result.less) / (result.more - result.less);
-
-            auto less_sample = get_sample(channel_idx, result.less);
-            auto more_sample = get_sample(channel_idx, result.more);
-
-            data[channel_idx] = less_sample + (more_sample - less_sample) * p;
-        }
-
-        read += delta;
-
-        return data;
+        is_playing = !result.reached_end;
+        read = result.next;
+        return result.data;
     }
 
     auto get_text_title() const -> std::string {
@@ -169,6 +171,7 @@ struct AudioSlice {
         json_object_set(root, "release", json_real(release.value));
         json_object_set(root, "read", json_real(read));
         json_object_set(root, "is_playing", json_boolean(is_playing));
+        json_object_set(root, "playback_profile", playback_profile.make_json_obj());
 
         return root;
     }
@@ -182,6 +185,7 @@ struct AudioSlice {
         release.value = json_real_value(json_object_get(root, "release"));
         read = json_real_value(json_object_get(root, "read"));
         is_playing = json_boolean_value(json_object_get(root, "is_playing"));
+        playback_profile.load_json(json_object_get(root, "playback_profile"));
         needs_ui_update = true;
     }
 

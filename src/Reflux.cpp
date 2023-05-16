@@ -34,8 +34,11 @@ struct Reflux: Module {
     enum ParamIds {
         // Playback
         PARAM_PLAYBACK_TARGET,
+        PARAM_PLAYBACK_MODE,
+        PARAM_PLAYBACK_PAN_VOL_MODE,
+        PARAM_PLAYBACK_TUNER_MODE,
+        PARAM_PLAYBACK_PAN_VOL,
         PARAM_PLAYBACK_SPEED,
-        PARAM_PLAYBACK_INERTIA,
         PARAM_PLAYBACK_PITCH,
 
         // Slice Knobs
@@ -72,26 +75,25 @@ struct Reflux: Module {
         PARAM_GLOBAL_CV0_TARGET,
         PARAM_GLOBAL_CV1_TARGET,
         PARAM_GLOBAL_CV2_TARGET,
-        PARAM_GLOBAL_TRIG0_TARGET,
+        PARAM_GLOBAL_CV3_TARGET,
         PARAM_GLOBAL_CV_MODE,
         PARAM_GLOBAL_TRIG_MODE,
-        PARAM_GLOBAL_CV_FOLLOW,
+        PARAM_GLOBAL_TRIG0_TARGET,
         PARAM_GLOBAL_TRIG1_TARGET,
         NUM_PARAMS
     };
 
     enum InputIds {
-        INPUT_TRIGGER0,
         INPUT_CV0,
-
         INPUT_CV1,
         INPUT_CV2,
+        INPUT_CV3,
 
         INPUT_AUDIOL,
         INPUT_AUDIOR,
 
+        INPUT_TRIGGER0,
         INPUT_TRIGGER1,
-        INPUT_TRIGGER2,
 
         NUM_INPUTS
     };
@@ -107,13 +109,16 @@ struct Reflux: Module {
         ENUMS(LIGHT_GLOBAL_CV0_TARGET, 3),
         ENUMS(LIGHT_GLOBAL_CV1_TARGET, 3),
         ENUMS(LIGHT_GLOBAL_CV2_TARGET, 3),
-        ENUMS(LIGHT_GLOBAL_TRIG0_TARGET, 3),
+        ENUMS(LIGHT_GLOBAL_CV3_TARGET, 3),
         ENUMS(LIGHT_GLOBAL_CV_MODE, 3),
         ENUMS(LIGHT_GLOBAL_TRIG_MODE, 3),
-        ENUMS(LIGHT_GLOBAL_CV_FOLLOW, 3),
+        ENUMS(LIGHT_GLOBAL_TRIG0_TARGET, 3),
         ENUMS(LIGHT_GLOBAL_TRIG1_TARGET, 3),
 
-        ENUMS(LIGHT_PLAYBACK_TARGET,3),
+        ENUMS(LIGHT_PLAYBACK_TARGET, 3),
+        ENUMS(LIGHT_PLAYBACK_MODE, 3),
+        ENUMS(LIGHT_PLAYBACK_PAN_VOL_MODE, 3),
+        ENUMS(LIGHT_PLAYBACK_TUNER_MODE, 3),
 
         NUM_LIGHTS
     };
@@ -121,7 +126,7 @@ struct Reflux: Module {
     enum InTrigMode { INTRIG_MODE_GATE, INTRIG_MODE_TRIGGER, INTRIG_MODE_TOGGLE };
     enum InTrigTarget { INTRIG_PLAY_CLIP, INTRIG_PLAY_SLICE };
     enum InCVTarget { INCV_SELECT_CLIP, INCV_SELECT_SLICE, INCV_SLICE_SPEED };
-    enum PlaybackPanelTarget { PLAYBACK_TARGET_CLIP, PLAYBACK_TARGET_SLICE, NUM_TARGETS};
+    enum PlaybackPanelTarget { PLAYBACK_TARGET_CLIP, PLAYBACK_TARGET_SLICE, NUM_TARGETS };
 
     static const int NUM_CLIPS = 12;
     DisplayBufferBuilder slice_dbb;
@@ -130,9 +135,8 @@ struct Reflux: Module {
     std::vector<std::shared_ptr<AudioSlice>> slices {};
     std::string directory_;
 
-    InTrigTarget cvtrig0_target = INTRIG_PLAY_CLIP;
+    InTrigTarget trig0_target = INTRIG_PLAY_CLIP;
     InTrigTarget trig1_target = INTRIG_PLAY_CLIP;
-    InTrigTarget trig2_target = INTRIG_PLAY_CLIP;
     bool global_follow = false;
 
     Eventful<double> selected_clip {0};
@@ -147,13 +151,14 @@ struct Reflux: Module {
     BooleanTrigger btntrig_clip_record, btntrig_clip_play, btntrig_clip_pause;
     BooleanTrigger btntrig_global_trig0_taget, btntrig_global_follow;
     BooleanTrigger btntrig_playback_target;
+    BooleanTrigger btntrig_playback_mode;
+    BooleanTrigger btntrig_playback_pan_vol_mode, btntrig_playback_tuner_mode;
 
     std::array<BooleanTrigger, PORT_MAX_CHANNELS> intrig_trig0;
 
     rack::dsp::Timer light_timer;
 
     PlaybackPanelTarget playback_target = PLAYBACK_TARGET_CLIP;
-    std::array<PlaybackProfile, PORT_MAX_CHANNELS> cvtrig_playback_profile;
 
     Reflux() {
         config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
@@ -308,10 +313,17 @@ struct Reflux: Module {
                 max_value = current_slice()->stop;
                 break;
             }
-            case PARAM_PLAYBACK_INERTIA: {
-                value = get_playback_inertia();
-                min_value = -2;
-                max_value = 2;
+            case PARAM_PLAYBACK_PAN_VOL: {
+                auto profile = get_selected_playback_profile();
+                if (profile && profile->control_volume) {
+                    value = &profile->volume;
+                    min_value = 0;
+                    max_value = 1;
+                } else {
+                    value = &profile->pan;
+                    min_value = -1;
+                    max_value = 1;
+                }
                 break;
             }
             case PARAM_PLAYBACK_SPEED: {
@@ -320,6 +332,14 @@ struct Reflux: Module {
                 max_value = 2;
                 break;
             }
+
+            case PARAM_PLAYBACK_PITCH: {
+                value = get_playback_pitch();
+                min_value = 0;
+                max_value = 16;
+                break;
+            }
+
             default:
                 return;
         }
@@ -350,7 +370,7 @@ struct Reflux: Module {
         SelectionMode mode = SelectionMode::MIDI_WRAP;
 
         for (int i = 0; i < PORT_MAX_CHANNELS; i++) {
-            switch (cvtrig0_target) {
+            switch (trig0_target) {
                 case InTrigTarget::INTRIG_PLAY_CLIP:
                     selected_clip_cv[i] = select_idx_by_cv(cv0s[i], mode, clips.size() - 1);
                     break;
@@ -367,7 +387,7 @@ struct Reflux: Module {
         bool use_cv0 = inputs[INPUT_CV0].isConnected();
         for (int i = 0; i < PORT_MAX_CHANNELS; i++) {
             if (intrig_trig0[i].process(inputs[INPUT_TRIGGER0].getVoltage(i) > 0.0)) {
-                switch (cvtrig0_target) {
+                switch (trig0_target) {
                     case InTrigTarget::INTRIG_PLAY_CLIP: {
                         const int clip_idx = use_cv0 ? (int)selected_clip_cv[i] : (int)selected_clip;
                         clips[clip_idx].start_playing();
@@ -444,23 +464,38 @@ struct Reflux: Module {
         lights[light_id + 2].setBrightness(color.b);
     }
 
+    PlaybackProfile* get_selected_playback_profile() {
+        return playback_target == PlaybackPanelTarget::PLAYBACK_TARGET_CLIP
+            ? &clips.at(selected_clip).playback_profile
+            : &slices.at(selected_slice)->playback_profile;
+    }
+
     void process(const ProcessArgs& args) override {
         //listen for playback target event button
         if (btntrig_playback_target.process(params[PARAM_PLAYBACK_TARGET].getValue() > 0.0)) {
             playback_target = playback_target == PlaybackPanelTarget::PLAYBACK_TARGET_CLIP && current_slice()
-                                  ? PlaybackPanelTarget::PLAYBACK_TARGET_SLICE
-                                  : PlaybackPanelTarget::PLAYBACK_TARGET_CLIP;
+                ? PlaybackPanelTarget::PLAYBACK_TARGET_SLICE
+                : PlaybackPanelTarget::PLAYBACK_TARGET_CLIP;
         }
+
+        // listen for playback mode event button
+        if (btntrig_playback_mode.process(params[PARAM_PLAYBACK_MODE].getValue() > 0.0)) {
+            auto playback_profile = get_selected_playback_profile();
+            playback_profile->mode = (PlaybackProfile::PlaybackMode)(
+                ((int)playback_profile->mode + 1) % PlaybackProfile::PlaybackMode::NUM_MODES
+            );
+        }
+
+        // listen for playback pan vol mode event button
+        if (btntrig_playback_pan_vol_mode.process(params[PARAM_PLAYBACK_PAN_VOL_MODE].getValue() > 0.0)) {
+            auto playback_profile = get_selected_playback_profile();
+            playback_profile->control_volume = !playback_profile->control_volume; 
+        }
+
 
         // listen for global trig0 target button event
         if (btntrig_global_trig0_taget.process(params[PARAM_GLOBAL_TRIG0_TARGET].getValue() > 0.0)) {
-            cvtrig0_target =
-                cvtrig0_target == (INTRIG_PLAY_CLIP && current_slice()) ? INTRIG_PLAY_SLICE : INTRIG_PLAY_CLIP;
-        }
-
-        // listen for global follow button event
-        if (btntrig_global_follow.process(params[PARAM_GLOBAL_CV_FOLLOW].getValue() > 0.0)) {
-            global_follow = !global_follow;
+            trig0_target = trig0_target == (INTRIG_PLAY_CLIP && current_slice()) ? INTRIG_PLAY_SLICE : INTRIG_PLAY_CLIP;
         }
 
         // read cv input to select sample
@@ -548,16 +583,30 @@ struct Reflux: Module {
             lights[LIGHT_CLIP_CLEAR].setSmoothBrightness(current_clip().can_clear ? .5f : 0.0f, UI_update_time);
             lights[LIGHT_CLIP_PLAY].setSmoothBrightness(current_clip().is_playing ? .5f : 0.0f, UI_update_time);
             {
-                bool trig0_target_slice = cvtrig0_target == INTRIG_PLAY_SLICE;
-                lights[LIGHT_GLOBAL_TRIG0_TARGET].setSmoothBrightness(trig0_target_slice ? .5f : 0.0f, UI_update_time);
+                std::map<InTrigTarget, float> hues {
+                    {INTRIG_PLAY_CLIP, 1.0},
+                    {INTRIG_PLAY_SLICE, 0.456},
+                };
+                set_rgb_light(LIGHT_GLOBAL_TRIG0_TARGET, nvgHSL(hues.at(trig0_target), 1.0, 0.2));
+                set_rgb_light(LIGHT_GLOBAL_TRIG1_TARGET, nvgHSL(hues.at(trig1_target), 1.0, 0.2));
             }
-            lights[LIGHT_GLOBAL_CV_FOLLOW + 1].setSmoothBrightness(global_follow ? .5f : 0.0f, UI_update_time);
-
             {
-                float hue = playback_target == PlaybackPanelTarget::PLAYBACK_TARGET_CLIP ? 0.456 : 1.0;
-				NVGcolor color = nvgHSL(hue, 1.0, 0.2);
-                set_rgb_light(LIGHT_PLAYBACK_TARGET, color);
-			}
+                std::map<PlaybackPanelTarget, float> hues {
+                    {PlaybackPanelTarget::PLAYBACK_TARGET_CLIP, 1.0},
+                    {PlaybackPanelTarget::PLAYBACK_TARGET_SLICE, 0.456},
+                };
+                set_rgb_light(LIGHT_PLAYBACK_TARGET, nvgHSL(hues.at(playback_target), 1.0, 0.2));
+            }
+            {
+                std::map<PlaybackProfile::PlaybackMode, float> hues {
+                    {PlaybackProfile::OneShot, 1.0},
+                    {PlaybackProfile::Loop, 0.456},
+                    {PlaybackProfile::PingPong, 0.8},
+                };
+                auto profile = get_selected_playback_profile();
+                set_rgb_light(LIGHT_PLAYBACK_MODE, nvgHSL(hues.at(profile->mode), 1.0, 0.2));
+                set_rgb_light(LIGHT_PLAYBACK_PAN_VOL_MODE, nvgHSL(0.0, 1.0, profile->control_volume ? 0.2 : 0.0));
+            }
         }
 
         // process_clips
@@ -582,7 +631,8 @@ struct Reflux: Module {
 
         json_object_set_new(json_root, "clips", json_clips);
         json_object_set_new(json_root, "slices", json_slices);
-        json_object_set_new(json_root, "cvtrig0_target", json_integer((int)cvtrig0_target));
+        json_object_set_new(json_root, "trig0_target", json_integer((int)trig0_target));
+        json_object_set_new(json_root, "playback_target", json_integer((int)playback_target));
 
         return json_root;
     }
@@ -604,7 +654,8 @@ struct Reflux: Module {
             slice->load_json(json_obj);
             slices.push_back(slice);
         }
-        cvtrig0_target = (Reflux::InTrigTarget)json_integer_value(json_object_get(root, "cvtrig0_target"));
+        trig0_target = (Reflux::InTrigTarget)json_integer_value(json_object_get(root, "trig0_target"));
+        playback_target = (PlaybackPanelTarget)json_integer_value(json_object_get(root, "playback_target"));
     }
 
     void onAdd(const AddEvent& event) override {
@@ -647,23 +698,28 @@ struct Reflux: Module {
         // TODO
     }
 
-    Eventful<double>* get_playback_inertia() {
-        if (playback_target == Reflux::PlaybackPanelTarget::PLAYBACK_TARGET_SLICE) {
-            if (current_slice())
-                return &current_slice()->playback_profile.inertia;
-        } else {
-            return &current_clip().playback_profile.inertia;
-        }
+    Eventful<double>* get_playback_volume() {
+        auto profile = get_selected_playback_profile();
+        if (profile)
+            return &profile->volume;
         return nullptr;
     }
-
+    Eventful<double>* get_playback_pan() {
+        auto profile = get_selected_playback_profile();
+        if (profile)
+            return &profile->pan;
+        return nullptr;
+    }
     Eventful<double>* get_playback_speed() {
-        if (playback_target == Reflux::PlaybackPanelTarget::PLAYBACK_TARGET_SLICE) {
-            if (current_slice())
-                return &current_slice()->playback_profile.speed;
-        } else {
-            return &current_clip().playback_profile.speed;
-        }
+        auto profile = get_selected_playback_profile();
+        if (profile)
+            return &profile->speed;
+        return nullptr;
+    }
+    Eventful<double>* get_playback_pitch() {
+        auto profile = get_selected_playback_profile();
+        if (profile)
+            return &profile->pitch;
         return nullptr;
     }
 };
@@ -799,7 +855,6 @@ struct WaveformDisplayWidget: TransparentWidget {
                         }
                     }
                 }
-
             }
         }
         draw_rect(args, color_borders, waveform_rect);
@@ -811,8 +866,8 @@ struct TextBoxProps {
     std::function<std::string()> get_txt;
     Optional<std::string> font_path;
     float font_size {9};
-    int align { NVG_ALIGN_RIGHT };
-    int length { 4 };
+    int align {NVG_ALIGN_RIGHT};
+    int length {4};
 };
 MAKE_BUILDER(MK_TextBoxProps, TextBoxProps, get_txt, font_path, font_size, align, length);
 
@@ -837,7 +892,7 @@ struct TextBoxWidget: TransparentWidget {
                 nvgTextAlign(args.vg, props.align);
                 nvgFontFaceId(args.vg, font->handle);
             }
-            const std::string base_txt = std::string(props.length,  '~' );
+            const std::string base_txt = std::string(props.length, '~');
             draw_text(args, color_base_txt, Rect(Vec(0), box.size), base_txt, props.font_size);
             draw_text(args, color_txt, Rect(Vec(0), box.size), text, props.font_size);
         }
@@ -845,7 +900,7 @@ struct TextBoxWidget: TransparentWidget {
 };
 
 std::string format_amount(double amount, int precision = 2) {
-    return fmt::format("{: .{}f}", amount, precision);
+    return fmt::format("{:.{}f}", amount, precision);
 }
 
 struct RefluxWidget: ModuleWidget {
@@ -908,16 +963,20 @@ struct RefluxWidget: ModuleWidget {
     }
 
     void add_info_display(Vec pos, std::function<std::string()> get_text) {
-        auto* display =
-            new TextBoxWidget(MK_TextBoxProps().get_txt(get_text).font_path(std::string(RAGE_FONT_14SEG))
-            );
+        auto* display = new TextBoxWidget(MK_TextBoxProps().get_txt(get_text).font_path(std::string(RAGE_FONT_14SEG)));
         display->box.pos = pos;
-        display->box.size = Vec(35, 15);
+        display->box.size = Vec(36, 15);
         addChild(display);
     }
 
     template<class T>
     using RSBLed = RubberSmallButtonLed<T>;
+    
+    void add_rgb_button(Vec pos, int btn_param_id, int light_param_id) {
+        addChild(createParamCentered<RubberSmallButton>(pos, module, btn_param_id));
+        addChild(createLightCentered<RSBLed<RedGreenBlueLight>>(pos, module, light_param_id));
+    }
+
 
     explicit RefluxWidget(Reflux* module) {
         setModule(module);
@@ -938,28 +997,48 @@ struct RefluxWidget: ModuleWidget {
         addOutput(createOutputCentered<PJ301MPort>(Vec(335, 70), module, Reflux::OUTPUT_EOC));
 
         // Playback Controls
-        addChild(createParamCentered<RubberSmallButton>(Vec(295, 110), module, Reflux::PARAM_PLAYBACK_TARGET));
-        addChild(createLightCentered<RSBLed<RedGreenBlueLight>>(Vec(295, 110), module, Reflux::LIGHT_PLAYBACK_TARGET));
-       
+        // -- Major Toggles
+        add_rgb_button(Vec(295, 110), Reflux::PARAM_PLAYBACK_TARGET, Reflux::LIGHT_PLAYBACK_TARGET);
+        add_rgb_button(Vec(295, 145), Reflux::PARAM_PLAYBACK_MODE, Reflux::LIGHT_PLAYBACK_MODE);
+
+        // -- Minor Toggles
+        add_rgb_button(Vec(295, 185), Reflux::PARAM_PLAYBACK_PAN_VOL_MODE, Reflux::LIGHT_PLAYBACK_PAN_VOL_MODE);
+        add_rgb_button(Vec(320, 185), Reflux::PARAM_PLAYBACK_TUNER_MODE, Reflux::LIGHT_PLAYBACK_TUNER_MODE);
+
+        // -- Pan / Volume
         addChild(
-            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 150), module, Reflux::PARAM_PLAYBACK_INERTIA)
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 225), module, Reflux::PARAM_PLAYBACK_PAN_VOL)
         );
-        add_info_display(Vec(315, 143), [module]() -> std::string {
-            if (!module) return "";
-            return format_amount(*module->get_playback_inertia());
+        add_info_display(Vec(315, 218), [module]() -> std::string {
+            if (!module)
+                return "";
+            if (module->get_selected_playback_profile()->control_volume) {
+                return format_amount(*module->get_playback_volume());
+            } else {
+                return format_amount(*module->get_playback_pan());
+            }
         });
 
+        // -- Speed
         addChild(
-            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 195), module, Reflux::PARAM_PLAYBACK_SPEED)
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 265), module, Reflux::PARAM_PLAYBACK_SPEED)
         );
-        add_info_display(Vec(315, 188), [module]() -> std::string {
-            if (!module) return "";
+        add_info_display(Vec(315, 258), [module]() -> std::string {
+            if (!module)
+                return "";
             return format_amount(*module->get_playback_speed());
         });
 
+        // -- Pitch
         addChild(
-            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 240), module, Reflux::PARAM_PLAYBACK_PITCH)
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 305), module, Reflux::PARAM_PLAYBACK_PITCH)
         );
+
+        add_info_display(Vec(315, 298), [module]() -> std::string {
+            if (!module)
+                return "";
+            return format_amount(*module->get_playback_pitch());
+        });
 
         // Audio Slice
         add_waveform_group<AudioSlice>(Vec(25, 110), {Reflux::PARAM_SELECTED_SLICE, 5});
@@ -987,7 +1066,7 @@ struct RefluxWidget: ModuleWidget {
         // Inputs
         add_widget_grid(WGArgs()
                             .pos(Vec(25, 300))
-                            .group({Reflux::INPUT_TRIGGER0, 8})
+                            .group({Reflux::INPUT_CV0, 8})
                             .columns(4)
                             .default_type(WidgetType::WTInputPort)
                             .spacing(Vec(30, 38)));

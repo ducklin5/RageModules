@@ -1,6 +1,6 @@
 #pragma once
-#include "dep/babycat/babycat.h"
 #include "audio_base.hpp"
+#include "dep/babycat/babycat.h"
 
 // NOLINTNEXTLINE (google-build-using-namespace)
 using namespace rage;
@@ -18,6 +18,7 @@ struct BabycatWaveformInfo {
         frame_rate_hz(babycat_waveform_get_frame_rate_hz(waveform)) {}
 };
 
+using namespace std::placeholders;
 struct AudioClip {
     int id = 0;
     IdxType num_frames = 0;
@@ -65,6 +66,8 @@ struct AudioClip {
         this->num_frames = info.num_frames;
         this->num_channels = info.num_channels;
         this->frame_rate_hz = info.frame_rate_hz;
+
+        playback_profile.init(num_channels, frame_rate_hz);
         this->raw_data.resize(this->num_channels);
 
         for (IdxType cidx = 0; cidx < this->num_channels; cidx++) {
@@ -227,7 +230,7 @@ struct AudioClip {
 
     void start_playing() {
         if (has_data()) {
-            this->read_head = playback_profile.speed > 0 ? start_head: stop_head;
+            this->read_head = playback_profile.speed > 0 ? start_head : stop_head;
             this->is_playing = true;
             this->can_clear = false;
         }
@@ -246,32 +249,17 @@ struct AudioClip {
     }
 
     auto read_frame() -> std::vector<double> {
-        auto delta = playback_profile.speed;
-        auto data = std::vector<double>(num_channels);
-        
-        bool is_out_of_bounds = read_head.value > stop_head.value
-            || read_head.value < start_head.value;
+        if (!is_playing)
+            return std::vector<double>(num_channels, 0.0);
 
-        if (!is_playing || is_out_of_bounds) {
-            read_head = delta > 0 ? start_head: stop_head;
-            is_playing = false;
-            return data;
-        }
+        using namespace std::placeholders;
+        auto result =
+            playback_profile
+                .read_frame(std::bind(get_sample, this, _1, _2), num_channels, read_head, start_head, stop_head);
 
-        for (IdxType channel_idx = 0; channel_idx < num_channels; channel_idx++) {
-            auto result = delta_adjust(read_head, delta);
-            auto p = result.more == result.less ? 0.0
-                : (result.actual - result.less) / (result.more - result.less);
-
-            auto less_sample = get_sample(channel_idx, result.less);
-            auto more_sample = get_sample(channel_idx, result.more);
-
-            data[channel_idx] = less_sample + (more_sample - less_sample) * p;
-        }
-
-        read_head.value += delta;
-
-        return data;
+        is_playing = !result.reached_end;
+        read_head.value = result.next;
+        return result.data;
     }
 
     struct WriteArgs {
@@ -343,7 +331,7 @@ struct AudioClip {
     }
 
     auto get_text_title() const -> std::string {
-        return  fmt::format("{}. {}", id+1, file_display);
+        return fmt::format("{}. {}", id + 1, file_display);
     }
 
     auto get_text_info() const -> std::string {
@@ -405,6 +393,7 @@ struct AudioClip {
         json_object_set(root, "write_head", json_real(write_head));
         json_object_set(root, "start_head", json_real(start_head));
         json_object_set(root, "stop_head", json_real(stop_head));
+        json_object_set(root, "playback_profile", playback_profile.make_json_obj());
 
         return root;
     }
@@ -419,5 +408,6 @@ struct AudioClip {
         write_head = json_real_value(json_object_get(root, "write_head"));
         start_head = json_real_value(json_object_get(root, "start_head"));
         stop_head = json_real_value(json_object_get(root, "stop_head"));
+        playback_profile.load_json(json_object_get(root, "playback_profile"));
     }
 };

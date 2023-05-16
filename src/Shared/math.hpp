@@ -19,15 +19,15 @@ inline auto sign_round(double value, double sign) -> double {
             : value;
 }
 
-struct DeltaAdjustment {
+struct RoundedResult {
     double more;
     double less;
     double actual;
 };
 
-inline auto delta_adjust(double value, double delta) -> DeltaAdjustment {
-    double newValue = value + delta;
-    double more = sign_round(newValue, delta);
-    double less = sign_round(newValue, -delta);
-    return { more, less, newValue };
+inline auto rounded_sum(double value, double delta) -> RoundedResult {
+    double actual = value + delta;
+    double more = sign_round(actual, delta);
+    double less = sign_round(actual, -delta);
+    return { more, less, actual };
 }
