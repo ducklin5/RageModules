@@ -61,7 +61,6 @@ struct AudioSlice {
         read(start),
         display_buffer_builder(dbb)
     {
-        playback_profile.init(m_clip.num_channels, m_clip.frame_rate_hz);
         update_data();
     }
 
@@ -106,6 +105,7 @@ struct AudioSlice {
         auto result = playback_profile.read_frame(
             std::bind(get_sample, this, _1, _2),
             num_channels,
+            m_clip.frame_rate_hz,
             read,
             start,
             stop

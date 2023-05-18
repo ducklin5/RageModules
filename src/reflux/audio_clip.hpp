@@ -66,8 +66,6 @@ struct AudioClip {
         this->num_frames = info.num_frames;
         this->num_channels = info.num_channels;
         this->frame_rate_hz = info.frame_rate_hz;
-
-        playback_profile.init(num_channels, frame_rate_hz);
         this->raw_data.resize(this->num_channels);
 
         for (IdxType cidx = 0; cidx < this->num_channels; cidx++) {
@@ -253,9 +251,14 @@ struct AudioClip {
             return std::vector<double>(num_channels, 0.0);
 
         using namespace std::placeholders;
-        auto result =
-            playback_profile
-                .read_frame(std::bind(get_sample, this, _1, _2), num_channels, read_head, start_head, stop_head);
+        auto result = playback_profile.read_frame(
+            std::bind(get_sample, this, _1, _2),
+            num_channels,
+            frame_rate_hz,
+            read_head,
+            start_head,
+            stop_head
+        );
 
         is_playing = !result.reached_end;
         read_head.value = result.next;
