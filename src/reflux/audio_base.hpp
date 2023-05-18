@@ -188,8 +188,8 @@ struct MultiChannelBuffer {
     // implements a circular buffer
   private:
     std::vector<std::vector<double>> data;
-    IdxType num_channels = 1;
-    IdxType m_size = 1;
+    IdxType num_channels = 0;
+    IdxType m_size = 0;
 
     IdxType oldest_idx = 0;
 
@@ -207,6 +207,14 @@ struct MultiChannelBuffer {
             }
         }
         oldest_idx = 0;
+    }
+    
+    void mult(double x) {
+        for (int i = 0; i < m_size; i++) {
+            for (int chan = 0; chan < num_channels; chan++) {
+                data[i][chan] *= x;
+            }
+        }
     }
 
     std::vector<double>* get(IdxType idx) {
@@ -232,7 +240,12 @@ struct MultiChannelBuffer {
     }
 
     void push(std::vector<double> frame) {
-        frame.resize(num_channels, 0.0);
+        auto fsize = frame.size();
+        if (fsize > num_channels)
+            set_channels(frame.size());
+        else if(fsize < num_channels)
+            frame.resize(num_channels, 0.0);
+
         data[oldest_idx] = frame;
         oldest_idx = (oldest_idx + 1) % m_size;
     }
@@ -293,27 +306,34 @@ double window_fn(double x) {
 struct RealtimeMultiChannelTuner {
     MultiChannelBuffer raw_buffer;
     MultiChannelBuffer filtered_buffer;
+    MultiChannelBuffer out_buffer;
     std::vector<IIR4BandPass> filters;
 
-    double sample_rate;
+    double sample_rate = 1.0;
     double period_ratio = 1.0;
-    double freq = 0.0;
+    double freq = 1000.0;
     double Q = 1.0;
 
-    IdxType optimal_buffer_size() {
-        return (IdxType)(sample_rate / 60);  // 60Hz is lowest supported frequency
+    IdxType optimal_out_buffer_size() {
+        return (IdxType)(1);  // 10000Hz is highest supported frequency
+    }
+
+    IdxType optimal_in_buffer_size() {
+        return (IdxType)(sample_rate / 100);  // 100Hz is lowest supported frequency
     }
 
     void set_channels(double num_channels) {
         raw_buffer.set_channels(num_channels);
         filtered_buffer.set_channels(num_channels);
+        out_buffer.set_channels(num_channels);
         config_filters(freq, Q);
     }
 
     void set_sample_rate(double sample_rate) {
         this->sample_rate = sample_rate;
-        raw_buffer.set_size(optimal_buffer_size());
-        filtered_buffer.set_size(optimal_buffer_size());
+        raw_buffer.set_size(optimal_in_buffer_size());
+        filtered_buffer.set_size(optimal_in_buffer_size());
+        out_buffer.set_size(optimal_out_buffer_size());
     }
 
     void set_period_ratio(double period_ratio) {
@@ -346,16 +366,16 @@ struct RealtimeMultiChannelTuner {
 
         raw_buffer.push(frame);
         filtered_buffer.push(bandpass(frame));
-        auto out = std::vector<double>(frame.size(), 0.0);
+        out_buffer.reset();
 
-        IdxType inptr = 0;
-        IdxType outptr = 0;
+        int inptr = 0;
+        int outptr = 0;
 
         std::vector<double>* old_x = nullptr;
         std::vector<double>* x = nullptr;
 
-        IdxType period_length = 0;
-        IdxType old_zero_corssing = 0;
+        int period_length = 0;
+        int old_zero_corssing = 0;
 
         while (true) {
             inptr += 1;
@@ -370,36 +390,44 @@ struct RealtimeMultiChannelTuner {
                 period_length = inptr - old_zero_corssing;
                 old_zero_corssing = inptr;
 
-                double outptr_ratio = (double)outptr;
+                double outptr_ratio = (double)outptr / (double)out_buffer.size();
                 double inptr_ratio = (double)inptr / (double)filtered_buffer.size();
 
                 if (outptr_ratio < inptr_ratio) {
                     outptr += (int)((double)period_length * period_ratio);
+                    
+                    /*
                     int n = -outptr;
-                    auto in_frame = raw_buffer.get(n + inptr);
+                    auto* out_frame = out_buffer.get(0);
+                    auto* in_frame = raw_buffer.get(n + inptr);
 
-                    auto window = window_fn((double)n / period_length);
                     if (in_frame) {
+                        auto window = window_fn((double)n / period_length);
                         for (int chan = 0; chan < filtered_buffer.channels(); chan++) {
-                            out[chan] += (*in_frame)[chan] * window;
+                            (*out_frame)[chan] += (*in_frame)[chan] * window;
                         }
                     }
+                    */
 
-                    /* for (int n = -period_length; n < (int) period_length; n++){
-                        auto out_frame = out_buffer.get(n + outptr);
-                        auto in_frame = filtered_buffer.get(n + inptr);
-                        auto window = window_fn((double) n / period_length);
-                        if (out_frame && in_frame) {
-                            for (int chan = 0; chan < num_channels; chan++) {
-                                (*out_frame)[chan] += (*in_frame)[chan] * window;
+                    ///*
+                    for (int n = -period_length; n < period_length; n++){
+                        auto* out_frame = out_buffer.get(n + outptr);
+                        if(out_frame) {
+                            auto* in_frame = raw_buffer.get(n + inptr);
+                            if (in_frame) {
+                                auto window = window_fn((double) n / period_length);
+                                for (int chan = 0; chan < out_buffer.channels(); chan++) {
+                                    (*out_frame)[chan] += (*in_frame)[chan] * window;
+                                }
                             }
                         }
-                    } */
+                    } 
+                    //*/
                 }
             }
         }
 
-        return out;
+        return *out_buffer.get(0);
     }
 };
 
@@ -416,8 +444,8 @@ std::string format_frequency(double amount) {
     if (amount < 1000)
         return fmt::format("{:.0f}", amount);
     else if (amount < 10000)
-        return fmt::format("{:.2f}", amount/1000 ) + 'k';
-    return fmt::format("{:.1f}", amount/1000 ) + 'k';
+        return fmt::format("{:.2f}", amount / 1000) + 'k';
+    return fmt::format("{:.1f}", amount / 1000) + 'k';
 }
 
 struct PlaybackProfile {
@@ -434,9 +462,9 @@ struct PlaybackProfile {
     Eventful<double> pan = 0.l;
     Eventful<double> volume = 1.l;
     Eventful<double> speed = 1.l;
-    Eventful<double> xhift { 0.l, [this](EventfulBase::Event, double) { this->tuner.set_period_ratio(xhift); } };
-    Eventful<double> freq {0.1, on_freq_q_changed};
-    Eventful<double> q {0.1, on_freq_q_changed};
+    Eventful<double> xhift {1.l, [this](EventfulBase::Event, double) { this->tuner.set_period_ratio(xhift); }};
+    Eventful<double> freq {500, on_freq_q_changed};
+    Eventful<double> q {1.0, on_freq_q_changed};
 
     RealtimeMultiChannelTuner tuner;
 
@@ -451,11 +479,11 @@ struct PlaybackProfile {
     EventfulValueRange get_tune_knob_value() {
         switch (tuner_knob_mode) {
             case TunerKnobMode::Resonance:
-                return {&q, 0.1, 10, fmt::format("{:.2f}", q)};
+                return {&q, 0.1, 9.99, fmt::format("R{:.2f}", q)};
             case TunerKnobMode::Frequency:
-                return {&freq, 0.1, 10000, format_frequency(freq)};
+                return {&freq, 60, 10000, format_frequency(freq)};
             case TunerKnobMode::Xhift:
-                return {&xhift, -4, 4, fmt::format("{:.2f}", xhift)};
+                return {&xhift, 0.1, 4, fmt::format("X{:.2f}", xhift)};
         }
     }
 
