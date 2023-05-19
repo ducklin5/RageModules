@@ -226,6 +226,21 @@ struct MultiChannelBuffer {
         return &data[data_idx];
     }
 
+    std::vector<double> get_smooth(double idx) {
+        auto index_up = ceil(idx);
+        auto index_down = floor(idx);
+        auto data_up = get( index_up);
+        auto data_down = get(index_down);
+        if (data_up == nullptr || data_down == nullptr)
+            return std::vector<double>(num_channels, 0.0);
+        auto frac = idx - index_down;
+        auto result = std::vector<double>(num_channels, 0.0);
+        for (int i = 0; i < num_channels; i++) {
+            result[i] = data_up->at(i) * frac + data_down->at(i) * (1.0 - frac);
+        }
+        return result;
+    }
+
     const std::vector<double> get_const(IdxType idx) const {
         auto data_idx = (oldest_idx + idx) % m_size;
         return data[data_idx];
@@ -304,9 +319,7 @@ double window_fn(double x) {
 }
 
 struct RealtimeMultiChannelTuner {
-    MultiChannelBuffer raw_buffer;
     MultiChannelBuffer filtered_buffer;
-    MultiChannelBuffer out_buffer;
     std::vector<IIR4BandPass> filters;
 
     double sample_rate = 1.0;
@@ -323,17 +336,13 @@ struct RealtimeMultiChannelTuner {
     }
 
     void set_channels(double num_channels) {
-        raw_buffer.set_channels(num_channels);
         filtered_buffer.set_channels(num_channels);
-        out_buffer.set_channels(num_channels);
         config_filters(freq, Q);
     }
 
     void set_sample_rate(double sample_rate) {
         this->sample_rate = sample_rate;
-        raw_buffer.set_size(optimal_in_buffer_size());
         filtered_buffer.set_size(optimal_in_buffer_size());
-        out_buffer.set_size(optimal_out_buffer_size());
     }
 
     void set_period_ratio(double period_ratio) {
@@ -360,74 +369,54 @@ struct RealtimeMultiChannelTuner {
         return ret;
     }
 
+    double outptr = 0.0;
+
     auto process(std::vector<double> frame) -> std::vector<double> {
         if (frame.size() != filtered_buffer.channels())
             set_channels(frame.size());
 
-        raw_buffer.push(frame);
-        filtered_buffer.push(bandpass(frame));
-        out_buffer.reset();
+        auto filtered_frame = bandpass(frame);
+        
+        // apply gain
+        for (IdxType i = 0; i < filtered_frame.size(); i++) {
+            filtered_frame[i] *= Q;
+        } 
 
-        int inptr = 0;
-        int outptr = 0;
+        filtered_buffer.push(filtered_frame);
 
-        std::vector<double>* old_x = nullptr;
+        auto residual_frame = std::vector<double>(filtered_frame.size());
+        for (IdxType i = 0; i < filtered_frame.size(); i++) {
+            residual_frame[i] = frame[i] - Q * filtered_frame[i];
+        }
+
+        // pitch detection
+        IdxType period_length = filtered_buffer.size();
+        bool zero_crossing_detected = false;
+        IdxType recent_zero_corssing;
+        std::vector<double>* newer_x = nullptr;
         std::vector<double>* x = nullptr;
 
-        int period_length = 0;
-        int old_zero_corssing = 0;
-
-        while (true) {
-            inptr += 1;
-            if (inptr >= filtered_buffer.size())
-                break;
-
-            // pitch detection
-            old_x = x;
-            x = filtered_buffer.get(inptr);
-
-            if (old_x && (*old_x)[0] > 0 && (*x)[0] < 0) {  // zero crossing detected
-                period_length = inptr - old_zero_corssing;
-                old_zero_corssing = inptr;
-
-                double outptr_ratio = (double)outptr / (double)out_buffer.size();
-                double inptr_ratio = (double)inptr / (double)filtered_buffer.size();
-
-                if (outptr_ratio < inptr_ratio) {
-                    outptr += (int)((double)period_length * period_ratio);
-                    
-                    /*
-                    int n = -outptr;
-                    auto* out_frame = out_buffer.get(0);
-                    auto* in_frame = raw_buffer.get(n + inptr);
-
-                    if (in_frame) {
-                        auto window = window_fn((double)n / period_length);
-                        for (int chan = 0; chan < filtered_buffer.channels(); chan++) {
-                            (*out_frame)[chan] += (*in_frame)[chan] * window;
-                        }
-                    }
-                    */
-
-                    ///*
-                    for (int n = -period_length; n < period_length; n++){
-                        auto* out_frame = out_buffer.get(n + outptr);
-                        if(out_frame) {
-                            auto* in_frame = raw_buffer.get(n + inptr);
-                            if (in_frame) {
-                                auto window = window_fn((double) n / period_length);
-                                for (int chan = 0; chan < out_buffer.channels(); chan++) {
-                                    (*out_frame)[chan] += (*in_frame)[chan] * window;
-                                }
-                            }
-                        }
-                    } 
-                    //*/
+        for (int i = filtered_frame.size() - 1; i >= 0; i--) {
+            newer_x = x;
+            x = filtered_buffer.get(i);
+            if (newer_x && (*newer_x)[0] > 0 && (*x)[0] < 0) {  // zero crossing detected
+                if (zero_crossing_detected) {
+                    period_length = recent_zero_corssing - i;
+                    break;
                 }
+                zero_crossing_detected = true;
+                recent_zero_corssing = i;
             }
         }
 
-        return *out_buffer.get(0);
+        // adjust outptr
+        outptr += -1 + period_ratio;
+
+        // wrap outptr
+        if (outptr >= filtered_buffer.size()) outptr -= period_length;
+        if (outptr < 0) outptr += period_length;
+
+        return filtered_buffer.get_smooth(outptr);
     }
 };
 
