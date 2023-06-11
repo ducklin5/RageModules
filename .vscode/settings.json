@@ -59,6 +59,7 @@
 
   "C_Cpp.codeAnalysis.clangTidy.checks.disabled": [
     "misc-static-assert",
+    "readability-suspicious-call-argument"
   ],
   "files.associations": {
     "new": "cpp",

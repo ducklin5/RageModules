@@ -164,13 +164,13 @@ struct Region {
     Region(float begin, float end, const std::string& tag = "region") : begin(begin), end(end), tag(tag) {}
 };
 
-struct IIR4BandPass {
+struct IIR4Filter {
     Biquad filter1;
     Biquad filter2;
 
-    IIR4BandPass(double sample_rate, double freq, double Q) :
-        filter1(BQType::bandpass, freq / sample_rate, Q, 0.0),
-        filter2(BQType::bandpass, freq / sample_rate, Q, 0.0) {}
+    IIR4Filter(BQType FT, double sample_rate, double freq, double Q) :
+        filter1(FT, freq / sample_rate, Q, 0.0),
+        filter2(FT, freq / sample_rate, Q, 0.0) {}
 
     double config(double sample_rate, double freq, double Q) {
         filter1.setFc(freq / sample_rate);
@@ -183,6 +183,14 @@ struct IIR4BandPass {
         return filter2.process(filter1.process(in));
     }
 };
+
+auto filter_many(std::vector<IIR4Filter>& filters, std::vector<double> frame) -> std::vector<double> {
+    auto ret = std::vector<double>(frame.size());
+    for (IdxType i = 0; i < frame.size(); i++) {
+        ret[i] = filters[i].process(frame[i]);
+    }
+    return ret;
+}
 
 struct MultiChannelBuffer {
     // implements a circular buffer
@@ -208,7 +216,7 @@ struct MultiChannelBuffer {
         }
         oldest_idx = 0;
     }
-    
+
     void mult(double x) {
         for (int i = 0; i < m_size; i++) {
             for (int chan = 0; chan < num_channels; chan++) {
@@ -229,7 +237,7 @@ struct MultiChannelBuffer {
     std::vector<double> get_smooth(double idx) {
         auto index_up = ceil(idx);
         auto index_down = floor(idx);
-        auto data_up = get( index_up);
+        auto data_up = get(index_up);
         auto data_down = get(index_down);
         if (data_up == nullptr || data_down == nullptr)
             return std::vector<double>(num_channels, 0.0);
@@ -258,7 +266,7 @@ struct MultiChannelBuffer {
         auto fsize = frame.size();
         if (fsize > num_channels)
             set_channels(frame.size());
-        else if(fsize < num_channels)
+        else if (fsize < num_channels)
             frame.resize(num_channels, 0.0);
 
         data[oldest_idx] = frame;
@@ -315,34 +323,49 @@ struct MultiChannelBuffer {
 };
 
 double window_fn(double x) {
-    return 0.5 * (1.0 + std::cos(2.0 * M_PI * x));
+    return 0.5 * (1.0 - std::cos(M_PI * x));
+}
+
+int mod(int a, int b) {
+    return (a % b + b) % b;
 }
 
 struct RealtimeMultiChannelTuner {
     MultiChannelBuffer filtered_buffer;
-    std::vector<IIR4BandPass> filters;
+    MultiChannelBuffer reduction_buffer;
+    std::vector<IIR4Filter> bandpass_filters;
+    std::vector<IIR4Filter> lowpass_filters;
+    std::vector<IIR4Filter> highpass_filters;
 
+    double outptr = 0.0;
     double sample_rate = 1.0;
     double period_ratio = 1.0;
     double freq = 1000.0;
     double Q = 1.0;
 
+    double period_length = 0.0;
+    int zero_crossings_detected = 2;
+
     IdxType optimal_out_buffer_size() {
-        return (IdxType)(1);  // 10000Hz is highest supported frequency
+        return (IdxType)(sample_rate);  // 10000Hz is highest supported frequency
     }
 
     IdxType optimal_in_buffer_size() {
-        return (IdxType)(sample_rate / 100);  // 100Hz is lowest supported frequency
+        return (IdxType)(3 * sample_rate / 100);  // 100Hz is lowest supported frequency
     }
 
     void set_channels(double num_channels) {
         filtered_buffer.set_channels(num_channels);
+        reduction_buffer.set_channels(num_channels);
         config_filters(freq, Q);
     }
 
     void set_sample_rate(double sample_rate) {
         this->sample_rate = sample_rate;
-        filtered_buffer.set_size(optimal_in_buffer_size());
+        auto in_buf_size = optimal_in_buffer_size();
+        this->period_length = in_buf_size;
+        filtered_buffer.set_size(in_buf_size);
+        reduction_buffer.set_size(optimal_out_buffer_size());
     }
 
     void set_period_ratio(double period_ratio) {
@@ -353,70 +376,133 @@ struct RealtimeMultiChannelTuner {
         this->freq = freq;
         this->Q = Q;
 
-        if (filters.size() != filtered_buffer.channels())
-            filters.resize(filtered_buffer.channels(), IIR4BandPass(sample_rate, freq, Q));
+        if (bandpass_filters.size() != filtered_buffer.channels())
+            bandpass_filters.resize(filtered_buffer.channels(), IIR4Filter(BQType::bandpass, sample_rate, freq, Q));
+
+        if (lowpass_filters.size() != filtered_buffer.channels())
+            lowpass_filters.resize(filtered_buffer.channels(), IIR4Filter(BQType::lowpass, sample_rate, freq, Q));
+        
+        if (highpass_filters.size() != filtered_buffer.channels())
+            highpass_filters.resize(filtered_buffer.channels(), IIR4Filter(BQType::highpass, sample_rate, freq, Q));
 
         for (IdxType i = 0; i < filtered_buffer.channels(); i++) {
-            filters[i].config(sample_rate, freq, Q);
+            lowpass_filters[i].config(sample_rate, freq, 0.5);
+            bandpass_filters[i].config(sample_rate, freq, Q);
+            highpass_filters[i].config(sample_rate, freq, 0.5);
         }
     }
 
-    auto bandpass(std::vector<double> frame) -> std::vector<double> {
-        auto ret = std::vector<double>(frame.size());
-        for (IdxType i = 0; i < frame.size(); i++) {
-            ret[i] = filters[i].process(frame[i]);
-        }
-        return ret;
-    }
+    enum BandType {
+        highpass,
+        bandpass,
+        lowpass,
+    };
 
-    double outptr = 0.0;
+    struct FilterResult {
+        std::vector<double> highpass;
+        std::vector<double> bandpass;
+        std::vector<double> lowpass;
+    };
+
+    auto filter_bands(std::vector<double> frame) -> FilterResult {
+        auto highpass = filter_many(highpass_filters, frame);
+        auto bandpass = filter_many(bandpass_filters, frame);
+        auto lowpass = filter_many(lowpass_filters, frame);
+        return {highpass, bandpass, lowpass};
+    }
 
     auto process(std::vector<double> frame) -> std::vector<double> {
         if (frame.size() != filtered_buffer.channels())
             set_channels(frame.size());
 
-        auto filtered_frame = bandpass(frame);
-        
+        auto bands = filter_bands(frame);
+        auto filtered_frame = bands.bandpass;
+
         // apply gain
         for (IdxType i = 0; i < filtered_frame.size(); i++) {
-            filtered_frame[i] *= Q;
-        } 
+            filtered_frame[i] *= (1+Q);
+        }
+
 
         filtered_buffer.push(filtered_frame);
-
-        auto residual_frame = std::vector<double>(filtered_frame.size());
-        for (IdxType i = 0; i < filtered_frame.size(); i++) {
-            residual_frame[i] = frame[i] - Q * filtered_frame[i];
-        }
-
-        // pitch detection
-        IdxType period_length = filtered_buffer.size();
-        bool zero_crossing_detected = false;
-        IdxType recent_zero_corssing;
-        std::vector<double>* newer_x = nullptr;
-        std::vector<double>* x = nullptr;
-
-        for (int i = filtered_frame.size() - 1; i >= 0; i--) {
-            newer_x = x;
-            x = filtered_buffer.get(i);
-            if (newer_x && (*newer_x)[0] > 0 && (*x)[0] < 0) {  // zero crossing detected
-                if (zero_crossing_detected) {
-                    period_length = recent_zero_corssing - i;
-                    break;
-                }
-                zero_crossing_detected = true;
-                recent_zero_corssing = i;
-            }
-        }
 
         // adjust outptr
         outptr += -1 + period_ratio;
 
-        // wrap outptr
-        if (outptr >= filtered_buffer.size()) outptr -= period_length;
-        if (outptr < 0) outptr += period_length;
+        // how many output samples until the next underrun
+        Optional<double> next_underrun = period_ratio < 1 ? Some(outptr / (1 - period_ratio)) : None<double>();
 
-        return filtered_buffer.get_smooth(outptr);
+        // how many output samples until the next overrun
+        Optional<double> next_overrun =
+            period_ratio > 1 ? Some((filtered_buffer.size() - outptr) / (period_ratio - 1)) : None<double>();
+
+        bool is_underrun = next_underrun.some() && next_underrun.value() <= 0;
+        bool is_overrun = next_overrun.some() && next_overrun.value() <= 0;
+
+        // pitch detection
+
+        if (is_overrun || is_underrun) {
+            period_length = 0;
+            zero_crossings_detected = 0;
+
+            IdxType recent_zero_corssing = filtered_buffer.size();
+            std::vector<double>* newer_x = nullptr;
+            std::vector<double>* x = nullptr;
+
+            for (int i = recent_zero_corssing; i >= 0; i--) {
+                newer_x = x;
+                x = filtered_buffer.get(i);
+                if (newer_x && (*newer_x)[0] > 0 && (*x)[0] < 0) {  // zero crossing detected
+                    if (zero_crossings_detected > 0) {
+                        period_length += recent_zero_corssing - i;
+                    }
+                    recent_zero_corssing = i;
+                    zero_crossings_detected += 1;
+                }
+            }
+            //period_length /= (zero_crossings_detected - 1);
+            period_length = std::max(0.0, period_length);
+        }
+
+        // wrap outptr
+        if (is_overrun)
+            outptr -= period_length;
+        else if (is_underrun)
+            outptr += period_length;
+
+        // get the actual output frame
+        auto output_frame = filtered_buffer.get_smooth(outptr);
+
+        // how many samples on avg bwteeen output zero crossings
+        auto output_preriod_len = period_length * period_ratio / (zero_crossings_detected - 1);
+
+        // apply overrun crossfade
+        if (next_overrun.some()) {
+            if (next_overrun.value() <= output_preriod_len) {
+                double overrun = (1.0 - (next_overrun.value() / output_preriod_len));
+                for (int i = 0; i < output_frame.size(); i++) {
+                    output_frame[i] = output_frame[i] * (1.0 - overrun)
+                        + filtered_buffer.get_smooth(outptr - period_length)[i] * overrun;
+                }
+            }
+        }
+
+        // apply underrun crossfade
+        else if (next_underrun.some()) {
+            if (next_underrun.value() <= output_preriod_len) {
+                double underrun = (1.0 - (next_underrun.value() / output_preriod_len));
+                for (int i = 0; i < output_frame.size(); i++) {
+                    output_frame[i] = output_frame[i] * (1.0 - underrun)
+                        + filtered_buffer.get_smooth(outptr + period_length)[i] * underrun;
+                }
+            }
+        }
+
+        for (int i = 0; i < output_frame.size(); i++) {
+            output_frame[i] += (bands.lowpass[i] + bands.highpass[i]) * 0.5;
+        }
+
+        return output_frame;
     }
 };
 
