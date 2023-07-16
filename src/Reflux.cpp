@@ -118,7 +118,7 @@ struct Reflux: Module {
 
         ENUMS(LIGHT_PLAYBACK_TARGET, 3),
         ENUMS(LIGHT_PLAYBACK_MODE, 3),
-        ENUMS(LIGHT_PLAYBACK_PAN_VOL_MODE, 3),
+        ENUMS(LIGHT_PLAYBACK_VOL_PAN_MODE, 3),
         ENUMS(LIGHT_PLAYBACK_TUNER_SWITCH, 3),
         ENUMS(LIGHT_PLAYBACK_TUNER_MODE, 3),
 
@@ -129,30 +129,39 @@ struct Reflux: Module {
     enum InCVTarget { INCV_SELECT_CLIP, INCV_SELECT_SLICE, INCV_SLICE_SPEED };
     enum PlaybackPanelTarget { PLAYBACK_TARGET_CLIP, PLAYBACK_TARGET_SLICE, NUM_TARGETS };
 
-    std::map<PlaybackProfile::PlaybackMode, float> playback_mode_hues {
-        {PlaybackProfile::PlaybackMode::OneShot, 1.0},
-        {PlaybackProfile::PlaybackMode::Loop, 0.456},
-        {PlaybackProfile::PlaybackMode::PingPong, 0.2},
-    };
-
-    std::map<PlaybackProfile::PVKnobMode, float> pv_mode_hues {
-        {PlaybackProfile::PVKnobMode::Pan, 1.0},
-        {PlaybackProfile::PVKnobMode::Volume, 0.456},
-    };
-
-    std::map<PlaybackProfile::TunerKnobMode, float> tuner_mode_hues {
-        {PlaybackProfile::TunerKnobMode::Resonance, 1.0},
-        {PlaybackProfile::TunerKnobMode::Frequency, 0.456},
-        {PlaybackProfile::TunerKnobMode::Xhift, 0.2},
-    };
-
     std::map<PlaybackPanelTarget, float> playback_target_hues {
         {PlaybackPanelTarget::PLAYBACK_TARGET_CLIP, 0.456},
         {PlaybackPanelTarget::PLAYBACK_TARGET_SLICE, 1.0},
     };
 
+    std::map<PlaybackProfile::PlaybackMode, float> playback_mode_hues {
+        {PlaybackProfile::PlaybackMode::OneShot, 0.456},
+        {PlaybackProfile::PlaybackMode::Loop, 1.0},
+        {PlaybackProfile::PlaybackMode::PingPong, 0.2},
+    };
+
+    std::map<PlaybackProfile::VPKnobMode, float> vp_mode_hues {
+        {PlaybackProfile::VPKnobMode::Volume, 0.456},
+        {PlaybackProfile::VPKnobMode::Pan, 1.0},
+    };
+
+    std::map<RealtimeMultiChannelTuner::OutputMode, NVGcolor> tuner_output_colors {
+        {RealtimeMultiChannelTuner::OutputMode::OFF, nvgHSL(0.0, 1.0, 0.0)},
+        {RealtimeMultiChannelTuner::OutputMode::MIX, nvgHSL(0.456, 1.0, 0.2)},
+        {RealtimeMultiChannelTuner::OutputMode::WET, nvgHSL(1.0, 1.0, 0.2)},
+        {RealtimeMultiChannelTuner::OutputMode::LP, nvgHSL(0.63, 1.0, 0.2 )},
+        {RealtimeMultiChannelTuner::OutputMode::BP, nvgHSL(0.2, 1.0, 0.2)},
+        {RealtimeMultiChannelTuner::OutputMode::HP, nvgHSL(0.78, 1.0, 0.2)},
+    };
+
+    std::map<PlaybackProfile::TunerKnobMode, float> tuner_control_hues {
+        {PlaybackProfile::TunerKnobMode::Range, 0.456},
+        {PlaybackProfile::TunerKnobMode::Frequency, 1.0},
+        {PlaybackProfile::TunerKnobMode::Xhift, 0.2},
+    };
+
     std::map<InTrigTarget, float> in_trig_taget_hues {
-        {INTRIG_PLAY_CLIP,  0.456},
+        {INTRIG_PLAY_CLIP, 0.456},
         {INTRIG_PLAY_SLICE, 1.0},
     };
 
@@ -343,7 +352,8 @@ struct Reflux: Module {
             }
             case PARAM_PLAYBACK_PAN_VOL: {
                 auto opt = get_playback_pv_knob_value();
-                if (!opt.some()) return;
+                if (!opt.some())
+                    return;
                 auto res = opt.value();
                 value = res.value;
                 min_value = res.min_value;
@@ -359,7 +369,8 @@ struct Reflux: Module {
 
             case PARAM_PLAYBACK_TUNE_KNOB: {
                 auto opt = get_playback_tune_knob_value();
-                if (!opt.some()) return;
+                if (!opt.some())
+                    return;
                 auto res = opt.value();
                 value = res.value;
                 min_value = res.min_value;
@@ -515,14 +526,15 @@ struct Reflux: Module {
         // listen for playback pan vol mode event button
         if (btntrig_playback_pan_vol_mode.process(params[PARAM_PLAYBACK_PAN_VOL_MODE].getValue() > 0.0)) {
             auto playback_profile = get_selected_playback_profile();
-            playback_profile->pv_knob_mode = (PlaybackProfile::PVKnobMode
-            )(((int)playback_profile->pv_knob_mode + 1) % (int)PlaybackProfile::PVKnobMode::NUM_MODES);
+            playback_profile->vp_knob_mode = (PlaybackProfile::VPKnobMode
+            )(((int)playback_profile->vp_knob_mode + 1) % (int)PlaybackProfile::VPKnobMode::NUM_MODES);
         }
 
         // listen for playback tuner switch event button
         if (btntrig_playback_tuner_switch.process(params[PARAM_PLAYBACK_TUNER_SWITCH].getValue() > 0.0)) {
             auto playback_profile = get_selected_playback_profile();
-            playback_profile->enable_tuner = !playback_profile->enable_tuner;
+            playback_profile->tuner.output_mode = (RealtimeMultiChannelTuner::OutputMode
+            )(((int)playback_profile->tuner.output_mode + 1) % (int)RealtimeMultiChannelTuner::OutputMode::NUM_MODES);
         }
 
         // listen for playback tuner mode event button
@@ -623,13 +635,13 @@ struct Reflux: Module {
             lights[LIGHT_CLIP_PLAY].setSmoothBrightness(current_clip().is_playing ? .5f : 0.0f, UI_update_time);
             set_rgb_light(LIGHT_GLOBAL_TRIG0_TARGET, nvgHSL(in_trig_taget_hues.at(trig0_target), 1.0, 0.2));
             set_rgb_light(LIGHT_GLOBAL_TRIG1_TARGET, nvgHSL(in_trig_taget_hues.at(trig1_target), 1.0, 0.2));
-            set_rgb_light(LIGHT_PLAYBACK_TARGET, nvgHSL(playback_target_hues.at(playback_target), 1.0, 0.2));
-            
+
             auto* profile = get_selected_playback_profile();
+            set_rgb_light(LIGHT_PLAYBACK_TARGET, nvgHSL(playback_target_hues.at(playback_target), 1.0, 0.2));
             set_rgb_light(LIGHT_PLAYBACK_MODE, nvgHSL(playback_mode_hues.at(profile->mode), 1.0, 0.2));
-            set_rgb_light(LIGHT_PLAYBACK_PAN_VOL_MODE, nvgHSL(pv_mode_hues.at(profile->pv_knob_mode), 1.0, 0.2));
-            set_rgb_light(LIGHT_PLAYBACK_TUNER_SWITCH, nvgHSL(0.0, 1.0, profile->enable_tuner ? 0.2 : 0.0));
-            set_rgb_light(LIGHT_PLAYBACK_TUNER_MODE, nvgHSL(tuner_mode_hues.at(profile->tuner_knob_mode), 1.0, 0.2));
+            set_rgb_light(LIGHT_PLAYBACK_VOL_PAN_MODE, nvgHSL(vp_mode_hues.at(profile->vp_knob_mode), 1.0, 0.2));
+            set_rgb_light(LIGHT_PLAYBACK_TUNER_SWITCH, tuner_output_colors.at(profile->tuner.output_mode));
+            set_rgb_light(LIGHT_PLAYBACK_TUNER_MODE, nvgHSL(tuner_control_hues.at(profile->tuner_knob_mode), 1.0, 0.2));
         }
 
         // process_clips
@@ -723,7 +735,8 @@ struct Reflux: Module {
 
     Optional<EventfulValueRange> get_playback_pv_knob_value() {
         auto profile = get_selected_playback_profile();
-        if (profile) return Some(profile->get_pv_knob_value());
+        if (profile)
+            return Some(profile->get_pv_knob_value());
         return None<EventfulValueRange>();
     }
 
@@ -733,10 +746,11 @@ struct Reflux: Module {
             return &profile->speed;
         return nullptr;
     }
-    
+
     Optional<EventfulValueRange> get_playback_tune_knob_value() {
         auto profile = get_selected_playback_profile();
-        if (profile) return Some(profile->get_tune_knob_value());
+        if (profile)
+            return Some(profile->get_tune_knob_value());
         return None<EventfulValueRange>();
     }
 };
@@ -1014,45 +1028,47 @@ struct RefluxWidget: ModuleWidget {
 
         // Playback Controls
         // -- Major Toggles
-        add_rgb_button(Vec(295, 110), Reflux::PARAM_PLAYBACK_TARGET, Reflux::LIGHT_PLAYBACK_TARGET);
-        add_rgb_button(Vec(295, 145), Reflux::PARAM_PLAYBACK_MODE, Reflux::LIGHT_PLAYBACK_MODE);
+        add_rgb_button(Vec(290, 110), Reflux::PARAM_PLAYBACK_TARGET, Reflux::LIGHT_PLAYBACK_TARGET);
+        add_rgb_button(Vec(290, 145), Reflux::PARAM_PLAYBACK_MODE, Reflux::LIGHT_PLAYBACK_MODE);
 
         // -- Minor Toggles
-        add_rgb_button(Vec(295, 185), Reflux::PARAM_PLAYBACK_PAN_VOL_MODE, Reflux::LIGHT_PLAYBACK_PAN_VOL_MODE);
-        add_rgb_button(Vec(320, 185), Reflux::PARAM_PLAYBACK_TUNER_SWITCH, Reflux::LIGHT_PLAYBACK_TUNER_SWITCH);
-        add_rgb_button(Vec(345, 185), Reflux::PARAM_PLAYBACK_TUNER_KNOB_MODE, Reflux::LIGHT_PLAYBACK_TUNER_MODE);
+        add_rgb_button(Vec(290, 185), Reflux::PARAM_PLAYBACK_PAN_VOL_MODE, Reflux::LIGHT_PLAYBACK_VOL_PAN_MODE);
+        add_rgb_button(Vec(315, 185), Reflux::PARAM_PLAYBACK_TUNER_SWITCH, Reflux::LIGHT_PLAYBACK_TUNER_SWITCH);
+        add_rgb_button(Vec(340, 185), Reflux::PARAM_PLAYBACK_TUNER_KNOB_MODE, Reflux::LIGHT_PLAYBACK_TUNER_MODE);
 
         // -- Pan / Volume
         addChild(
-            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 225), module, Reflux::PARAM_PLAYBACK_PAN_VOL)
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(290, 225), module, Reflux::PARAM_PLAYBACK_PAN_VOL)
         );
-        add_info_display(Vec(315, 218), [module]() -> std::string {
-             if (module) {
+        add_info_display(Vec(310, 218), [module]() -> std::string {
+            if (module) {
                 Optional<EventfulValueRange> result = module->get_playback_pv_knob_value();
-                if (result.some()) return result.value().str_value;
+                if (result.some())
+                    return result.value().str_value;
             }
             return "";
         });
 
         // -- Speed
         addChild(
-            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 265), module, Reflux::PARAM_PLAYBACK_SPEED)
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(290, 265), module, Reflux::PARAM_PLAYBACK_SPEED)
         );
-        add_info_display(Vec(315, 258), [module]() -> std::string {
+        add_info_display(Vec(310, 258), [module]() -> std::string {
             if (!module)
                 return "";
             return format_amount(*module->get_playback_speed());
         });
 
-        // -- Pitch
+        // -- Tune 
         addChild(
-            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(295, 305), module, Reflux::PARAM_PLAYBACK_TUNE_KNOB)
+            createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(290, 305), module, Reflux::PARAM_PLAYBACK_TUNE_KNOB)
         );
 
-        add_info_display(Vec(315, 298), [module]() -> std::string {
+        add_info_display(Vec(310, 298), [module]() -> std::string {
             if (module) {
                 Optional<EventfulValueRange> result = module->get_playback_tune_knob_value();
-                if (result.some()) return result.value().str_value;
+                if (result.some())
+                    return result.value().str_value;
             }
             return "";
         });

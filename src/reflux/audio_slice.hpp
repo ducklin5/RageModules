@@ -153,7 +153,7 @@ struct AudioSlice {
             if (needs_ui_update) {
                 m_clip.sort_consumers();
                 if (display_buffer_builder)
-                    display_buffer_builder->build({get_sample_lambda, &m_display_buf, (IdxType)start, (IdxType)stop});
+                    display_buffer_builder->build({get_sample_lambda, &m_display_buf, (IdxType)start, (IdxType)stop, true});
                 needs_ui_update = false;
             }
         }

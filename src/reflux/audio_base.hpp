@@ -43,6 +43,7 @@ struct DisplayBufferBuilder {
         DisplayBufferType* dst = nullptr;
         IdxType start = 0;
         IdxType stop = 0;
+        bool normalize = false;
 
         BuildArgs() = default;
 
@@ -50,12 +51,14 @@ struct DisplayBufferBuilder {
             std::function<double(IdxType, IdxType)> get_sample,
             DisplayBufferType* dst,
             IdxType start,
-            IdxType stop
+            IdxType stop,
+            bool normalize = false
         ) :
             get_sample(get_sample),
             dst(dst),
             start(start),
-            stop(stop) {}
+            stop(stop),
+            normalize(normalize) {}
     };
 
   private:
@@ -110,7 +113,9 @@ struct DisplayBufferBuilder {
         IdxType chunk_size = (args.stop - args.start) / AUDIO_CLIP_DISPLAY_RES;
         chunk_size = chunk_size ? chunk_size : 1;
 
+        // for each channel
         for (int cidx = 0; cidx < AUDIO_CLIP_DISPLAY_CHANNELS; cidx++) {
+            // we need to downsample the audio to fit the display
             buffer[cidx].resize(AUDIO_CLIP_DISPLAY_RES, 0.0);
             IdxType curr = args.start;
             double max = 0;
@@ -121,6 +126,11 @@ struct DisplayBufferBuilder {
                 }
                 buffer[cidx][i] = accum / ((double)chunk_size);
                 max = std::max(buffer[cidx][i], max);
+            }
+            if (args.normalize) {
+                for (IdxType i = 0; i < AUDIO_CLIP_DISPLAY_RES; i++) {
+                    buffer[cidx][i] /= max;
+                }
             }
         }
     }
@@ -175,8 +185,10 @@ struct IIR4Filter {
     double config(double sample_rate, double freq, double Q) {
         filter1.setFc(freq / sample_rate);
         filter1.setQ(Q);
+        filter1.reset();
         filter2.setFc(freq / sample_rate);
         filter2.setQ(Q);
+        filter2.reset();
     }
 
     double process(double in) {
@@ -337,11 +349,15 @@ struct RealtimeMultiChannelTuner {
     std::vector<IIR4Filter> lowpass_filters;
     std::vector<IIR4Filter> highpass_filters;
 
+    enum OutputMode { OFF=0, MIX, WET, LP, BP, HP, NUM_MODES };
+
+    OutputMode output_mode = OFF;
+
     double outptr = 0.0;
     double sample_rate = 1.0;
     double period_ratio = 1.0;
     double freq = 1000.0;
-    double Q = 1.0;
+    double range = 1.0; // bandwith of the filter in octaves
 
     double period_length = 0.0;
     int zero_crossings_detected = 2;
@@ -354,10 +370,14 @@ struct RealtimeMultiChannelTuner {
         return (IdxType)(3 * sample_rate / 100);  // 100Hz is lowest supported frequency
     }
 
+    void set_output_mode(OutputMode mode) {
+        output_mode = mode;
+    }
+
     void set_channels(double num_channels) {
         filtered_buffer.set_channels(num_channels);
         reduction_buffer.set_channels(num_channels);
-        config_filters(freq, Q);
+        config_filters(freq, range);
     }
 
     void set_sample_rate(double sample_rate) {
@@ -372,31 +392,31 @@ struct RealtimeMultiChannelTuner {
         this->period_ratio = period_ratio;
     }
 
-    void config_filters(double freq, double Q) {
+    void config_filters(double freq, double range) {
         this->freq = freq;
-        this->Q = Q;
+        this->range = range;
+        
+        double low_freq = pow(2.0, log2(freq)  - range * 0.75);
+        double high_freq = pow(2.0, log2(freq) + range * 0.75);
 
-        if (bandpass_filters.size() != filtered_buffer.channels())
-            bandpass_filters.resize(filtered_buffer.channels(), IIR4Filter(BQType::bandpass, sample_rate, freq, Q));
+        double w = 2.0 * M_PI * freq / sample_rate;
+        double Q =  0.5 / sinh(0.5 * log(2) * range * w/sin(w));
 
         if (lowpass_filters.size() != filtered_buffer.channels())
-            lowpass_filters.resize(filtered_buffer.channels(), IIR4Filter(BQType::lowpass, sample_rate, freq, Q));
+            lowpass_filters.resize(filtered_buffer.channels(), IIR4Filter(BQType::lowpass, sample_rate, low_freq, 1));
+        
+        if (bandpass_filters.size() != filtered_buffer.channels())
+            bandpass_filters.resize(filtered_buffer.channels(), IIR4Filter(BQType::bandpass, sample_rate, freq, Q));
         
         if (highpass_filters.size() != filtered_buffer.channels())
-            highpass_filters.resize(filtered_buffer.channels(), IIR4Filter(BQType::highpass, sample_rate, freq, Q));
+            highpass_filters.resize(filtered_buffer.channels(), IIR4Filter(BQType::highpass, sample_rate, high_freq, 1));
 
         for (IdxType i = 0; i < filtered_buffer.channels(); i++) {
-            lowpass_filters[i].config(sample_rate, freq, 0.5);
+            lowpass_filters[i].config(sample_rate, low_freq, 1);
             bandpass_filters[i].config(sample_rate, freq, Q);
-            highpass_filters[i].config(sample_rate, freq, 0.5);
+            highpass_filters[i].config(sample_rate, high_freq, 1);
         }
     }
-
-    enum BandType {
-        highpass,
-        bandpass,
-        lowpass,
-    };
 
     struct FilterResult {
         std::vector<double> highpass;
@@ -405,8 +425,8 @@ struct RealtimeMultiChannelTuner {
     };
 
     auto filter_bands(std::vector<double> frame) -> FilterResult {
-        auto highpass = filter_many(highpass_filters, frame);
         auto bandpass = filter_many(bandpass_filters, frame);
+        auto highpass = filter_many(highpass_filters, frame);
         auto lowpass = filter_many(lowpass_filters, frame);
         return {highpass, bandpass, lowpass};
     }
@@ -414,15 +434,21 @@ struct RealtimeMultiChannelTuner {
     auto process(std::vector<double> frame) -> std::vector<double> {
         if (frame.size() != filtered_buffer.channels())
             set_channels(frame.size());
+        
+        if(output_mode == OFF)
+            return frame;
 
         auto bands = filter_bands(frame);
         auto filtered_frame = bands.bandpass;
 
-        // apply gain
-        for (IdxType i = 0; i < filtered_frame.size(); i++) {
-            filtered_frame[i] *= (1+Q);
+        switch (output_mode) {
+            case LP:
+                return bands.lowpass;
+            case BP:
+                return bands.bandpass;
+            case HP:
+                return bands.highpass;
         }
-
 
         filtered_buffer.push(filtered_frame);
 
@@ -497,6 +523,9 @@ struct RealtimeMultiChannelTuner {
                 }
             }
         }
+        
+        if (output_mode == WET)
+            return output_frame;
 
         for (int i = 0; i < output_frame.size(); i++) {
             output_frame[i] += (bands.lowpass[i] + bands.highpass[i]) * 0.5;
@@ -525,36 +554,34 @@ std::string format_frequency(double amount) {
 
 struct PlaybackProfile {
     enum class PlaybackMode { OneShot = 0, Loop, PingPong, NUM_MODES };
-    enum class TunerKnobMode { Resonance = 0, Frequency, Xhift, NUM_MODES };
-    enum class PVKnobMode { Pan = 0, Volume, NUM_MODES };
+    enum class TunerKnobMode { Range = 0, Frequency, Xhift, NUM_MODES };
+    enum class VPKnobMode { Volume = 0, Pan, NUM_MODES };
 
     PlaybackMode mode = PlaybackMode::OneShot;
-    TunerKnobMode tuner_knob_mode = TunerKnobMode::Resonance;
-    PVKnobMode pv_knob_mode = PVKnobMode::Volume;
+    TunerKnobMode tuner_knob_mode = TunerKnobMode::Range;
+    VPKnobMode vp_knob_mode = VPKnobMode::Volume;
 
-    Eventful<double>::Callback on_freq_q_changed = [this](EventfulBase::Event, double) { this->reconfig_filters(); };
+    Eventful<double>::Callback on_freq_range_changed = [this](EventfulBase::Event, double) { this->reconfig_filters(); };
 
-    Eventful<double> pan = 0.l;
     Eventful<double> volume = 1.l;
+    Eventful<double> pan = 0.l;
     Eventful<double> speed = 1.l;
     Eventful<double> xhift {1.l, [this](EventfulBase::Event, double) { this->tuner.set_period_ratio(xhift); }};
-    Eventful<double> freq {500, on_freq_q_changed};
-    Eventful<double> q {1.0, on_freq_q_changed};
+    Eventful<double> freq {500, on_freq_range_changed};
+    Eventful<double> range {1.0, on_freq_range_changed};
 
     RealtimeMultiChannelTuner tuner;
 
     double pong_mult = 1.l;
 
-    bool enable_tuner = false;
-
     void reconfig_filters() {
-        tuner.config_filters(freq, q);
+        tuner.config_filters(freq, range);
     }
 
     EventfulValueRange get_tune_knob_value() {
         switch (tuner_knob_mode) {
-            case TunerKnobMode::Resonance:
-                return {&q, 0.1, 9.99, fmt::format("R{:.2f}", q)};
+            case TunerKnobMode::Range:
+                return {&range, 0.1, 9.99, fmt::format("R{:.2f}", range)};
             case TunerKnobMode::Frequency:
                 return {&freq, 60, 10000, format_frequency(freq)};
             case TunerKnobMode::Xhift:
@@ -563,11 +590,11 @@ struct PlaybackProfile {
     }
 
     EventfulValueRange get_pv_knob_value() {
-        switch (pv_knob_mode) {
-            case PVKnobMode::Pan:
-                return {&pan, -1, 1};
-            case PVKnobMode::Volume:
-                return {&volume, 0, 1};
+        switch (vp_knob_mode) {
+            case VPKnobMode::Volume:
+                return {&volume, 0, 1, fmt::format("V{:.2f}", volume)};
+            case VPKnobMode::Pan:
+                return {&pan, -1, 1, fmt::format("{:.2f}", pan)};
         }
     }
 
@@ -632,9 +659,10 @@ struct PlaybackProfile {
         return {new_left * volume, new_right * volume};
     }
 
-    auto retune(IdxType frame_rate, std::vector<double> frame) -> std::vector<double> {
+    auto retune(std::vector<double> frame, IdxType frame_rate) -> std::vector<double> {
         if (tuner.sample_rate != frame_rate)
             tuner.set_sample_rate(frame_rate);
+
         return tuner.process(frame);
     }
 
@@ -660,7 +688,7 @@ struct PlaybackProfile {
 
         auto data = read_channels(get_sample, num_channels, params.read);
 
-        data = retune(frame_rate, data);
+        data = retune(data, frame_rate);
 
         data = repan(data);
 
