@@ -44,7 +44,7 @@ struct StatefulButtonController {
         state(state),
         paramId(paramId),
         max_state(max_state) {}
-    void process(std::vector<Param> params) {
+    void process(std::vector<Param>& params) {
         if (btntrig.process(params[paramId].getValue() > 0.0)) {
             state = (T)(((int)state + 1) % (int)max_state);
         }
@@ -683,9 +683,10 @@ struct Reflux: Module {
         }
 
         for (int i = 0; i < slices.size(); i++) {
-            if (slices.at(i)->is_playing) {
+            const auto& slice = slices.at(i);
+            if (slice->is_playing) {
                 wavefroms_playing += 1;
-                auto frame = slices.at(i)->read_frame();
+                auto frame = slice->read_frame();
                 if (frame.empty()) {
                     continue;
                 }
