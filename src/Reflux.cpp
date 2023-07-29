@@ -30,6 +30,27 @@
 // NOLINTNEXTLINE (google-build-using-namespace)
 using namespace rage;
 
+struct RefluxState {};
+
+using BooleanTrigger = rack::dsp::BooleanTrigger;
+template<typename T>
+struct StatefulButtonController {
+    int paramId;
+    T& state;
+    BooleanTrigger btntrig;
+    int max_state;
+
+    StatefulButtonController(int paramId, T& state, int max_state) :
+        state(state),
+        paramId(paramId),
+        max_state(max_state) {}
+    void process(std::vector<Param> params) {
+        if (btntrig.process(params[paramId].getValue() > 0.0)) {
+            state = (T)(((int)state + 1) % (int)max_state);
+        }
+    }
+};
+
 struct Reflux: Module {
     enum ParamIds {
         // Playback
@@ -125,10 +146,30 @@ struct Reflux: Module {
         NUM_LIGHTS
     };
     enum InTrigMode { INTRIG_MODE_GATE, INTRIG_MODE_TRIGGER, INTRIG_MODE_TOGGLE };
-    enum InTrigTarget { INTRIG_PLAY_CLIP, INTRIG_PLAY_SLICE };
-    enum InCVTarget { INCV_SELECT_CLIP, INCV_SELECT_SLICE, INCV_SLICE_SPEED };
-    enum PlaybackPanelTarget { PLAYBACK_TARGET_CLIP, PLAYBACK_TARGET_SLICE, NUM_TARGETS };
+    enum InTrigTarget { INTRIG_PLAY_CLIP, INTRIG_PLAY_SLICE, INTRIG_RECORD_CLIP, INTRIG_TARGET_MAX };
+    enum InCVMode { INCV_MODE_DISCRETE, INCV_MODE_NORMAL };
+    enum InCVTarget { INCV_SELECT_CLIP, INCV_SELECT_SLICE, INCV_VOL, INCV_PAN, INCV_SPEED, INCV_XHIFT, INCV_TARGET_MAX };
+    enum PlaybackPanelTarget { PLAYBACK_TARGET_CLIP, PLAYBACK_TARGET_SLICE, PLAYBACK_TARGET_MAX };
 
+    // State
+    static const int NUM_CLIPS = 12;
+    std::array<AudioClip, NUM_CLIPS> clips;
+    std::vector<std::shared_ptr<AudioSlice>> slices {};
+    std::string directory_;
+
+    InCVTarget cv0_target = INCV_SELECT_CLIP, cv1_target = INCV_SELECT_SLICE, cv2_target = INCV_VOL, cv3_target = INCV_SPEED;
+    InCVMode cv_mode = INCV_MODE_NORMAL;
+    InTrigMode trig_mode = INTRIG_MODE_GATE;
+    InTrigTarget trig0_target = INTRIG_PLAY_CLIP, trig1_target = INTRIG_PLAY_SLICE;
+    bool global_follow = false;
+
+    Eventful<double> selected_clip {0};
+    Eventful<double> selected_slice {0};
+    std::array<double, PORT_MAX_CHANNELS> selected_clip_cv;
+    std::array<double, PORT_MAX_CHANNELS> selected_slice_cv;
+    PlaybackPanelTarget playback_target = PLAYBACK_TARGET_CLIP;
+
+    // ViewController
     std::map<PlaybackPanelTarget, float> playback_target_hues {
         {PlaybackPanelTarget::PLAYBACK_TARGET_CLIP, 0.456},
         {PlaybackPanelTarget::PLAYBACK_TARGET_SLICE, 1.0},
@@ -149,7 +190,7 @@ struct Reflux: Module {
         {RealtimeMultiChannelTuner::OutputMode::OFF, nvgHSL(0.0, 1.0, 0.0)},
         {RealtimeMultiChannelTuner::OutputMode::MIX, nvgHSL(0.456, 1.0, 0.2)},
         {RealtimeMultiChannelTuner::OutputMode::WET, nvgHSL(1.0, 1.0, 0.2)},
-        {RealtimeMultiChannelTuner::OutputMode::LP, nvgHSL(0.63, 1.0, 0.2 )},
+        {RealtimeMultiChannelTuner::OutputMode::LP, nvgHSL(0.63, 1.0, 0.2)},
         {RealtimeMultiChannelTuner::OutputMode::BP, nvgHSL(0.2, 1.0, 0.2)},
         {RealtimeMultiChannelTuner::OutputMode::HP, nvgHSL(0.78, 1.0, 0.2)},
     };
@@ -160,33 +201,46 @@ struct Reflux: Module {
         {PlaybackProfile::TunerKnobMode::Xhift, 0.2},
     };
 
-    std::map<InTrigTarget, float> in_trig_taget_hues {
-        {INTRIG_PLAY_CLIP, 0.456},
-        {INTRIG_PLAY_SLICE, 1.0},
+    std::map<InTrigMode, float> in_trig_mode_hues {
+        {INTRIG_MODE_GATE, 0.456},
+        {INTRIG_MODE_TRIGGER, 1.0},
+        {INTRIG_MODE_TOGGLE, 0.2},
     };
 
-    static const int NUM_CLIPS = 12;
+    std::map<InCVTarget, float> in_cv_target_hues {
+        {INCV_SELECT_CLIP, 0.456},
+        {INCV_SELECT_SLICE, 1.0},
+        {INCV_PAN, 0.63},
+        {INCV_VOL, 0.2},
+        {INCV_SPEED, 0.78},
+        {INCV_XHIFT, 0.9}
+    };
+
+    std::map<InTrigTarget, float> in_trig_target_hues {
+        {INTRIG_PLAY_CLIP, 0.456},
+        {INTRIG_PLAY_SLICE, 1.0},
+        {INTRIG_RECORD_CLIP, 0.2},
+    };
+
     DisplayBufferBuilder slice_dbb;
     DisplayBufferBuilder clip_dbb;
-    std::array<AudioClip, NUM_CLIPS> clips;
-    std::vector<std::shared_ptr<AudioSlice>> slices {};
-    std::string directory_;
-
-    InTrigTarget trig0_target = INTRIG_PLAY_CLIP;
-    InTrigTarget trig1_target = INTRIG_PLAY_CLIP;
-    bool global_follow = false;
-
-    Eventful<double> selected_clip {0};
-    Eventful<double> selected_slice {0};
-    std::array<double, PORT_MAX_CHANNELS> selected_clip_cv;
-    std::array<double, PORT_MAX_CHANNELS> selected_slice_cv;
-
-    using BooleanTrigger = rack::dsp::BooleanTrigger;
 
     BooleanTrigger btntrig_slice_shiftl, btntrig_slice_shiftr, btntrig_slice_delete;
     BooleanTrigger btntrig_slice_play, btntrig_slice_pause, btntrig_slice_learn;
     BooleanTrigger btntrig_clip_record, btntrig_clip_play, btntrig_clip_pause;
-    BooleanTrigger btntrig_global_trig0_taget, btntrig_global_follow;
+
+    StatefulButtonController<InCVTarget> 
+        sbc_global_cv0_target {PARAM_GLOBAL_CV0_TARGET, cv0_target, INCV_TARGET_MAX},
+        sbc_global_cv1_target {PARAM_GLOBAL_CV1_TARGET, cv1_target, INCV_TARGET_MAX},
+        sbc_global_cv2_target {PARAM_GLOBAL_CV2_TARGET, cv2_target, INCV_TARGET_MAX},
+        sbc_global_cv3_target {PARAM_GLOBAL_CV3_TARGET, cv3_target, INCV_TARGET_MAX};
+    
+    StatefulButtonController<InTrigTarget> 
+        sbc_global_trig0_target {PARAM_GLOBAL_TRIG0_TARGET, trig0_target, INTRIG_TARGET_MAX},
+        sbc_global_trig1_target {PARAM_GLOBAL_TRIG1_TARGET, trig1_target, INTRIG_TARGET_MAX};
+
+    BooleanTrigger btntrig_global_cv_mode, btntrig_global_trig_mode, btntrig_global_trig0_taget,
+        btntrig_global_trig1_target;
     BooleanTrigger btntrig_playback_target;
     BooleanTrigger btntrig_playback_mode;
     BooleanTrigger btntrig_playback_pan_vol_mode, btntrig_playback_tuner_switch, btntrig_playback_tuner_mode;
@@ -194,8 +248,6 @@ struct Reflux: Module {
     std::array<BooleanTrigger, PORT_MAX_CHANNELS> intrig_trig0;
 
     rack::dsp::Timer light_timer;
-
-    PlaybackPanelTarget playback_target = PLAYBACK_TARGET_CLIP;
 
     Reflux() {
         config(NUM_PARAMS, NUM_INPUTS, NUM_OUTPUTS, NUM_LIGHTS);
@@ -386,6 +438,33 @@ struct Reflux: Module {
         *value = new_value;
     }
 
+    void process_slices(const ProcessArgs& args) {
+        for (int i = 0; i < slices.size(); i++) {
+            slices[i]->update_timer(args.sampleTime);
+        }
+    }
+
+    void update_slices_idx() {
+        for (IdxType idx = 0; idx < slices.size(); idx++) {
+            slices[idx]->idx = idx;
+            slices[idx]->total = slices.size();
+        }
+    }
+
+    void set_rgb_light(int light_id, NVGcolor color) {
+        lights[light_id + 0].setBrightness(color.r);
+        lights[light_id + 1].setBrightness(color.g);
+        lights[light_id + 2].setBrightness(color.b);
+    }
+
+    PlaybackProfile* get_selected_playback_profile() {
+        return playback_target == PlaybackPanelTarget::PLAYBACK_TARGET_CLIP
+            ? &clips.at(selected_clip).playback_profile
+            : &slices.at(selected_slice)->playback_profile;
+    }
+
+    // ============= PROCESS =============
+
     void process_read_input_audio(const ProcessArgs& args) {
         for (IdxType i = 0; i < NUM_CLIPS; i++) {
             if (clips.at(i).is_recording) {
@@ -447,114 +526,17 @@ struct Reflux: Module {
         }
     }
 
-    void compute_output(const ProcessArgs& args) {
-        int wavefroms_playing = 0;
-        double audio_out_l = 0;
-        double audio_out_r = 0;
-
-        for (int i = 0; i < NUM_CLIPS; i++) {
-            if (clips.at(i).is_playing) {
-                wavefroms_playing += 1;
-                auto frame = clips.at(i).read_frame();
-                audio_out_l += frame[0];
-                audio_out_r += frame[1];
-            }
-        }
-
-        for (int i = 0; i < slices.size(); i++) {
-            if (slices.at(i)->is_playing) {
-                wavefroms_playing += 1;
-                auto frame = slices.at(i)->read_frame();
-                if (frame.empty()) {
-                    continue;
-                }
-                audio_out_l += frame[0];
-                if (frame.size() > 1) {
-                    audio_out_r += frame[1];
-                }
-            }
-        }
-
-        wavefroms_playing = std::max(1, wavefroms_playing);
-        audio_out_l /= wavefroms_playing;
-        audio_out_r /= wavefroms_playing;
-
-        getOutput(OUTPUT_AUDIOL).setVoltage((float)audio_out_l);
-        getOutput(OUTPUT_AUDIOR).setVoltage((float)audio_out_r);
-    }
-
-    void process_slices(const ProcessArgs& args) {
-        for (int i = 0; i < slices.size(); i++) {
-            slices[i]->update_timer(args.sampleTime);
-        }
-    }
-
-    void update_slices_idx() {
-        for (IdxType idx = 0; idx < slices.size(); idx++) {
-            slices[idx]->idx = idx;
-            slices[idx]->total = slices.size();
-        }
-    }
-
-    void set_rgb_light(int light_id, NVGcolor color) {
-        lights[light_id + 0].setBrightness(color.r);
-        lights[light_id + 1].setBrightness(color.g);
-        lights[light_id + 2].setBrightness(color.b);
-    }
-
-    PlaybackProfile* get_selected_playback_profile() {
-        return playback_target == PlaybackPanelTarget::PLAYBACK_TARGET_CLIP
-            ? &clips.at(selected_clip).playback_profile
-            : &slices.at(selected_slice)->playback_profile;
-    }
-
-    void process(const ProcessArgs& args) override {
-        //listen for playback target event button
-        if (btntrig_playback_target.process(params[PARAM_PLAYBACK_TARGET].getValue() > 0.0)) {
-            playback_target = playback_target == PlaybackPanelTarget::PLAYBACK_TARGET_CLIP && current_slice()
-                ? PlaybackPanelTarget::PLAYBACK_TARGET_SLICE
-                : PlaybackPanelTarget::PLAYBACK_TARGET_CLIP;
-        }
-
-        // listen for playback mode event button
-        if (btntrig_playback_mode.process(params[PARAM_PLAYBACK_MODE].getValue() > 0.0)) {
-            auto playback_profile = get_selected_playback_profile();
-            playback_profile->mode = (PlaybackProfile::PlaybackMode
-            )(((int)playback_profile->mode + 1) % (int)PlaybackProfile::PlaybackMode::NUM_MODES);
-        }
-
-        // listen for playback pan vol mode event button
-        if (btntrig_playback_pan_vol_mode.process(params[PARAM_PLAYBACK_PAN_VOL_MODE].getValue() > 0.0)) {
-            auto playback_profile = get_selected_playback_profile();
-            playback_profile->vp_knob_mode = (PlaybackProfile::VPKnobMode
-            )(((int)playback_profile->vp_knob_mode + 1) % (int)PlaybackProfile::VPKnobMode::NUM_MODES);
-        }
-
-        // listen for playback tuner switch event button
-        if (btntrig_playback_tuner_switch.process(params[PARAM_PLAYBACK_TUNER_SWITCH].getValue() > 0.0)) {
-            auto playback_profile = get_selected_playback_profile();
-            playback_profile->tuner.output_mode = (RealtimeMultiChannelTuner::OutputMode
-            )(((int)playback_profile->tuner.output_mode + 1) % (int)RealtimeMultiChannelTuner::OutputMode::NUM_MODES);
-        }
-
-        // listen for playback tuner mode event button
-        if (btntrig_playback_tuner_mode.process(params[PARAM_PLAYBACK_TUNER_KNOB_MODE].getValue() > 0.0)) {
-            auto playback_profile = get_selected_playback_profile();
-            playback_profile->tuner_knob_mode = (PlaybackProfile::TunerKnobMode
-            )(((int)playback_profile->tuner_knob_mode + 1) % (int)PlaybackProfile::TunerKnobMode::NUM_MODES);
-        }
-
+    void process_global_button_events(const ProcessArgs& args) {
         // listen for global trig0 target button event
-        if (btntrig_global_trig0_taget.process(params[PARAM_GLOBAL_TRIG0_TARGET].getValue() > 0.0)) {
-            trig0_target = trig0_target == (INTRIG_PLAY_CLIP && current_slice()) ? INTRIG_PLAY_SLICE : INTRIG_PLAY_CLIP;
-        }
+        sbc_global_trig0_target.process(params);
+        sbc_global_trig1_target.process(params);
+        sbc_global_cv0_target.process(params);
+        sbc_global_cv1_target.process(params);
+        sbc_global_cv2_target.process(params);
+        sbc_global_cv3_target.process(params);
+    }
 
-        // read cv input to select sample
-        process_read_input_cv(args);
-
-        // read audio input to current sample
-        process_read_input_audio(args);
-
+    void process_clip_button_events(const ProcessArgs& args) {
         // listen for start recording button event
         if (btntrig_clip_record.process(params[PARAM_CLIP_RECORD].getValue() > 0.0)) {
             current_clip().toggle_recording();
@@ -577,7 +559,9 @@ struct Reflux: Module {
                 selected_slice = slices.size() - 1;
             }
         }
+    }
 
+    void process_slice_button_events(const ProcessArgs& args) {
         // listen for slice play button event
         if (btntrig_slice_play.process(params[PARAM_SLICE_PLAY].getValue() > 0.0)) {
             if (current_slice()) {
@@ -620,11 +604,46 @@ struct Reflux: Module {
                 update_slices_idx();
             }
         }
+    }
 
-        // listen for slice shift l button event
-        process_read_input_trigs(args);
+    void process_playback_button_events(const ProcessArgs& args) {
+        //listen for playback target event button
+        if (btntrig_playback_target.process(params[PARAM_PLAYBACK_TARGET].getValue() > 0.0)) {
+            playback_target = playback_target == PlaybackPanelTarget::PLAYBACK_TARGET_CLIP && current_slice()
+                ? PlaybackPanelTarget::PLAYBACK_TARGET_SLICE
+                : PlaybackPanelTarget::PLAYBACK_TARGET_CLIP;
+        }
 
-        // update lights
+        // listen for playback mode event button
+        if (btntrig_playback_mode.process(params[PARAM_PLAYBACK_MODE].getValue() > 0.0)) {
+            auto playback_profile = get_selected_playback_profile();
+            playback_profile->mode = (PlaybackProfile::PlaybackMode
+            )(((int)playback_profile->mode + 1) % (int)PlaybackProfile::PlaybackMode::NUM_MODES);
+        }
+
+        // listen for playback pan vol mode event button
+        if (btntrig_playback_pan_vol_mode.process(params[PARAM_PLAYBACK_PAN_VOL_MODE].getValue() > 0.0)) {
+            auto playback_profile = get_selected_playback_profile();
+            playback_profile->vp_knob_mode = (PlaybackProfile::VPKnobMode
+            )(((int)playback_profile->vp_knob_mode + 1) % (int)PlaybackProfile::VPKnobMode::NUM_MODES);
+        }
+
+        // listen for playback tuner switch event button
+        if (btntrig_playback_tuner_switch.process(params[PARAM_PLAYBACK_TUNER_SWITCH].getValue() > 0.0)) {
+            auto playback_profile = get_selected_playback_profile();
+            playback_profile->tuner.output_mode = (RealtimeMultiChannelTuner::OutputMode
+            )(((int)playback_profile->tuner.output_mode + 1) % (int)RealtimeMultiChannelTuner::OutputMode::NUM_MODES);
+        }
+
+        // listen for playback tuner mode event button
+        if (btntrig_playback_tuner_mode.process(params[PARAM_PLAYBACK_TUNER_KNOB_MODE].getValue() > 0.0)) {
+            auto playback_profile = get_selected_playback_profile();
+            playback_profile->tuner_knob_mode = (PlaybackProfile::TunerKnobMode
+            )(((int)playback_profile->tuner_knob_mode + 1) % (int)PlaybackProfile::TunerKnobMode::NUM_MODES);
+        }
+    }
+
+    void process_update_lights(const ProcessArgs& args) {
         if (light_timer.process(args.sampleTime) > rage::UI_update_time) {
             light_timer.reset();
             if (current_slice()) {
@@ -633,8 +652,12 @@ struct Reflux: Module {
             lights[LIGHT_CLIP_RECORD].setSmoothBrightness(current_clip().is_recording ? .5f : 0.0f, UI_update_time);
             lights[LIGHT_CLIP_CLEAR].setSmoothBrightness(current_clip().can_clear ? .5f : 0.0f, UI_update_time);
             lights[LIGHT_CLIP_PLAY].setSmoothBrightness(current_clip().is_playing ? .5f : 0.0f, UI_update_time);
-            set_rgb_light(LIGHT_GLOBAL_TRIG0_TARGET, nvgHSL(in_trig_taget_hues.at(trig0_target), 1.0, 0.2));
-            set_rgb_light(LIGHT_GLOBAL_TRIG1_TARGET, nvgHSL(in_trig_taget_hues.at(trig1_target), 1.0, 0.2));
+            set_rgb_light(LIGHT_GLOBAL_CV0_TARGET, nvgHSL(in_cv_target_hues.at(cv0_target), 1.0, 0.2));
+            set_rgb_light(LIGHT_GLOBAL_CV1_TARGET, nvgHSL(in_cv_target_hues.at(cv1_target), 1.0, 0.2));
+            set_rgb_light(LIGHT_GLOBAL_CV2_TARGET, nvgHSL(in_cv_target_hues.at(cv2_target), 1.0, 0.2));
+            set_rgb_light(LIGHT_GLOBAL_CV3_TARGET, nvgHSL(in_cv_target_hues.at(cv3_target), 1.0, 0.2));
+            set_rgb_light(LIGHT_GLOBAL_TRIG0_TARGET, nvgHSL(in_trig_target_hues.at(trig0_target), 1.0, 0.2));
+            set_rgb_light(LIGHT_GLOBAL_TRIG1_TARGET, nvgHSL(in_trig_target_hues.at(trig1_target), 1.0, 0.2));
 
             auto* profile = get_selected_playback_profile();
             set_rgb_light(LIGHT_PLAYBACK_TARGET, nvgHSL(playback_target_hues.at(playback_target), 1.0, 0.2));
@@ -643,6 +666,68 @@ struct Reflux: Module {
             set_rgb_light(LIGHT_PLAYBACK_TUNER_SWITCH, tuner_output_colors.at(profile->tuner.output_mode));
             set_rgb_light(LIGHT_PLAYBACK_TUNER_MODE, nvgHSL(tuner_control_hues.at(profile->tuner_knob_mode), 1.0, 0.2));
         }
+    }
+
+    void compute_output(const ProcessArgs& args) {
+        int wavefroms_playing = 0;
+        double audio_out_l = 0;
+        double audio_out_r = 0;
+
+        for (int i = 0; i < NUM_CLIPS; i++) {
+            if (clips.at(i).is_playing) {
+                wavefroms_playing += 1;
+                auto frame = clips.at(i).read_frame();
+                audio_out_l += frame[0];
+                audio_out_r += frame[1];
+            }
+        }
+
+        for (int i = 0; i < slices.size(); i++) {
+            if (slices.at(i)->is_playing) {
+                wavefroms_playing += 1;
+                auto frame = slices.at(i)->read_frame();
+                if (frame.empty()) {
+                    continue;
+                }
+                audio_out_l += frame[0];
+                if (frame.size() > 1) {
+                    audio_out_r += frame[1];
+                }
+            }
+        }
+
+        wavefroms_playing = std::max(1, wavefroms_playing);
+        audio_out_l /= wavefroms_playing;
+        audio_out_r /= wavefroms_playing;
+
+        getOutput(OUTPUT_AUDIOL).setVoltage((float)audio_out_l);
+        getOutput(OUTPUT_AUDIOR).setVoltage((float)audio_out_r);
+    }
+
+    void process(const ProcessArgs& args) override {
+        // read cv input to select sample
+        process_read_input_cv(args);
+
+        // read audio input to current sample
+        process_read_input_audio(args);
+
+        // read global buttons
+        process_global_button_events(args);
+
+        // read clip buttons
+        process_clip_button_events(args);
+
+        // read slice buttons
+        process_slice_button_events(args);
+
+        // read playback buttons
+        process_playback_button_events(args);
+
+        // read trig inputs
+        process_read_input_trigs(args);
+
+        // update lights
+        process_update_lights(args);
 
         // process_clips
         process_slices(args);
@@ -1059,7 +1144,7 @@ struct RefluxWidget: ModuleWidget {
             return format_amount(*module->get_playback_speed());
         });
 
-        // -- Tune 
+        // -- Tune
         addChild(
             createParamCentered<RoundSmallGrayOmniKnob<Reflux>>(Vec(290, 305), module, Reflux::PARAM_PLAYBACK_TUNE_KNOB)
         );
