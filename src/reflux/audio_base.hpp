@@ -440,7 +440,7 @@ struct RealtimeMultiChannelTuner {
         return {highpass, bandpass, lowpass};
     }
 
-    auto process(const std::vector<double>& frame, std::vector<double>* output) -> std::vector<double> {
+    auto process(std::vector<double> frame) -> std::vector<double> {
         if (frame.size() != filtered_buffer.channels())
             set_channels(frame.size());
         
@@ -639,7 +639,9 @@ struct PlaybackProfile {
         return {param_read, param_speed, false};
     }
 
-    void read_channels(SampleGetter get_sample, IdxType num_channels, double pos, std::vector<double>* output) {
+    auto read_channels(SampleGetter get_sample, IdxType num_channels, double pos) -> std::vector<double> {
+        auto data = std::vector<double>(num_channels);
+
         for (IdxType channel_idx = 0; channel_idx < num_channels; channel_idx++) {
             auto result = rounded_sum(pos, speed);
             auto p = result.more == result.less ? 0.0 : (result.actual - result.less) / (result.more - result.less);
@@ -647,11 +649,13 @@ struct PlaybackProfile {
             auto less_sample = get_sample(channel_idx, result.less);
             auto more_sample = get_sample(channel_idx, result.more);
 
-            (*output)[channel_idx] = less_sample + (more_sample - less_sample) * p;
+            data[channel_idx] = less_sample + (more_sample - less_sample) * p;
         }
+
+        return data;
     }
 
-    void repan(std::vector<double> frame, std::vector<double>* output) {
+    auto repan(std::vector<double> frame) -> std::vector<double> {
         auto pan = this->pan.value;
         auto left = frame[0];
         auto right = frame[1];
@@ -660,15 +664,15 @@ struct PlaybackProfile {
         auto new_left = mid + side * pan;
         auto new_right = mid - side * pan;
 
-        (*output)[0] = new_left * volume;
-        (*output)[1] = new_right * volume;
+        auto result = std::vector<double>();
+        return {new_left * volume, new_right * volume};
     }
 
-    void retune(std::vector<double> frame, IdxType frame_rate, std::vector<double>* output)  {
+    auto retune(std::vector<double> frame, IdxType frame_rate) -> std::vector<double> {
         if (tuner.sample_rate != frame_rate)
             tuner.set_sample_rate(frame_rate);
 
-        tuner.process(frame, output);
+        return tuner.process(frame);
     }
 
     struct ReadResult {
@@ -678,7 +682,6 @@ struct PlaybackProfile {
     };
 
     auto read_frame(
-        std::vector<double>& output,
         SampleGetter get_sample,
         IdxType num_channels,
         IdxType frame_rate,
@@ -692,9 +695,9 @@ struct PlaybackProfile {
             return {std::vector<double>(num_channels, 0.0), params.read, true};
         }
 
-        read_channels(output, get_sample, num_channels, params.read);
+        auto data = read_channels(get_sample, num_channels, params.read);
 
-        retune(data, frame_rate);
+        data = retune(data, frame_rate);
 
         data = repan(data);
 
