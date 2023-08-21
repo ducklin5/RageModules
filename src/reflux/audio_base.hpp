@@ -31,7 +31,7 @@
 // NOLINTNEXTLINE (google-build-using-namespace)
 using namespace rage;
 
-enum { AUDIO_CLIP_DISPLAY_RES = 128 };
+enum { AUDIO_CLIP_DISPLAY_RES = 64 };
 enum { AUDIO_CLIP_DISPLAY_CHANNELS = 2 };
 using IdxType = uintptr_t;
 
@@ -111,28 +111,37 @@ struct DisplayBufferBuilder {
     void build_(BuildArgs args) {
         DisplayBufferType& buffer = *args.dst;
         IdxType chunk_size = (args.stop - args.start) / AUDIO_CLIP_DISPLAY_RES;
-        chunk_size = chunk_size ? chunk_size : 1;
+
+        double inverse_chunk_size = 1.f / static_cast<double>(chunk_size);
+        IdxType curr, i, j;
+        double max, accum;
+        int cidx = 0;
+        int cidx1 = 1;
 
         // for each channel
-        for (int cidx = 0; cidx < AUDIO_CLIP_DISPLAY_CHANNELS; cidx++) {
+        // for (int cidx = 0; cidx < 1; cidx++) {
             // we need to downsample the audio to fit the display
-            buffer[cidx].resize(AUDIO_CLIP_DISPLAY_RES, 0.0);
-            IdxType curr = args.start;
-            double max = 0;
-            for (IdxType i = 0; i < AUDIO_CLIP_DISPLAY_RES; i++) {
-                double accum = 0.0;
-                for (IdxType j = 0; j < chunk_size; j++) {
+            if(buffer[cidx].size() != AUDIO_CLIP_DISPLAY_RES) buffer[cidx].resize(AUDIO_CLIP_DISPLAY_RES, 0.0);
+            if(buffer[cidx1].size() != AUDIO_CLIP_DISPLAY_RES) buffer[cidx1].resize(AUDIO_CLIP_DISPLAY_RES, 0.0);
+            curr = args.start;
+            max = 0;
+            for (i = 0; i < AUDIO_CLIP_DISPLAY_RES; i++) {
+                accum = 0.0;
+                for (j = 0; j < chunk_size; j++) {
                     accum += std::abs(args.get_sample(cidx, curr++));
                 }
-                buffer[cidx][i] = accum / ((double)chunk_size);
+                buffer[cidx][i] = accum * inverse_chunk_size;
+                buffer[cidx1][i] = accum * inverse_chunk_size;
                 max = std::max(buffer[cidx][i], max);
             }
+            auto inverse_max = 1.0 / max;
             if (args.normalize) {
-                for (IdxType i = 0; i < AUDIO_CLIP_DISPLAY_RES; i++) {
-                    buffer[cidx][i] /= max;
+                for (i = 0; i < AUDIO_CLIP_DISPLAY_RES; i++) {
+                    buffer[cidx][i] *= inverse_max;
+                    buffer[cidx1][i] *= inverse_max;
                 }
             }
-        }
+        //}
     }
 };
 
@@ -431,7 +440,7 @@ struct RealtimeMultiChannelTuner {
         return {highpass, bandpass, lowpass};
     }
 
-    auto process(std::vector<double> frame) -> std::vector<double> {
+    auto process(const std::vector<double>& frame, std::vector<double>* output) -> std::vector<double> {
         if (frame.size() != filtered_buffer.channels())
             set_channels(frame.size());
         
@@ -630,9 +639,7 @@ struct PlaybackProfile {
         return {param_read, param_speed, false};
     }
 
-    auto read_channels(SampleGetter get_sample, IdxType num_channels, double pos) -> std::vector<double> {
-        auto data = std::vector<double>(num_channels);
-
+    void read_channels(SampleGetter get_sample, IdxType num_channels, double pos, std::vector<double>* output) {
         for (IdxType channel_idx = 0; channel_idx < num_channels; channel_idx++) {
             auto result = rounded_sum(pos, speed);
             auto p = result.more == result.less ? 0.0 : (result.actual - result.less) / (result.more - result.less);
@@ -640,13 +647,11 @@ struct PlaybackProfile {
             auto less_sample = get_sample(channel_idx, result.less);
             auto more_sample = get_sample(channel_idx, result.more);
 
-            data[channel_idx] = less_sample + (more_sample - less_sample) * p;
+            (*output)[channel_idx] = less_sample + (more_sample - less_sample) * p;
         }
-
-        return data;
     }
 
-    auto repan(std::vector<double> frame) -> std::vector<double> {
+    void repan(std::vector<double> frame, std::vector<double>* output) {
         auto pan = this->pan.value;
         auto left = frame[0];
         auto right = frame[1];
@@ -655,15 +660,15 @@ struct PlaybackProfile {
         auto new_left = mid + side * pan;
         auto new_right = mid - side * pan;
 
-        auto result = std::vector<double>();
-        return {new_left * volume, new_right * volume};
+        (*output)[0] = new_left * volume;
+        (*output)[1] = new_right * volume;
     }
 
-    auto retune(std::vector<double> frame, IdxType frame_rate) -> std::vector<double> {
+    void retune(std::vector<double> frame, IdxType frame_rate, std::vector<double>* output)  {
         if (tuner.sample_rate != frame_rate)
             tuner.set_sample_rate(frame_rate);
 
-        return tuner.process(frame);
+        tuner.process(frame, output);
     }
 
     struct ReadResult {
@@ -673,6 +678,7 @@ struct PlaybackProfile {
     };
 
     auto read_frame(
+        std::vector<double>& output,
         SampleGetter get_sample,
         IdxType num_channels,
         IdxType frame_rate,
@@ -686,9 +692,9 @@ struct PlaybackProfile {
             return {std::vector<double>(num_channels, 0.0), params.read, true};
         }
 
-        auto data = read_channels(get_sample, num_channels, params.read);
+        read_channels(output, get_sample, num_channels, params.read);
 
-        data = retune(data, frame_rate);
+        retune(data, frame_rate);
 
         data = repan(data);
 

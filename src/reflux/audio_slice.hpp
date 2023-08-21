@@ -146,15 +146,16 @@ struct AudioSlice {
 
     void update_timer(float delta) {
         using namespace std::placeholders;
-        const auto get_sample_lambda = std::bind(&AudioSlice::get_sample, this, _1, _2);
 
         if (m_update_timer.process(delta) >= rage::UI_update_time) {
-            m_update_timer.reset();
             if (needs_ui_update) {
                 m_clip.sort_consumers();
-                if (display_buffer_builder)
+                if (display_buffer_builder) {
+                    const auto get_sample_lambda = std::bind(&AudioSlice::get_sample, this, _1, _2);
                     display_buffer_builder->build({get_sample_lambda, &m_display_buf, (IdxType)start, (IdxType)stop, true});
+                }
                 needs_ui_update = false;
+                m_update_timer.reset();
             }
         }
     }

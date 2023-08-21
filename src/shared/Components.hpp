@@ -17,7 +17,7 @@ TODO: Replace placeholder
 */
 
 namespace rage {
-const float UI_update_time = 1.f / 15.f;
+const float UI_update_time = 1.f / 6.f;
 
 struct RoundGrayKnob: app::SvgKnob {
     RoundGrayKnob() {

@@ -44,9 +44,10 @@ struct StatefulButtonController {
         state(state),
         paramId(paramId),
         max_state(max_state) {}
-    void process(std::vector<Param>& params) {
+
+    inline void process(std::vector<Param>& params) {
         if (btntrig.process(params[paramId].getValue() > 0.0)) {
-            state = (T)(((int)state + 1) % (int)max_state);
+            state = static_cast<T>((static_cast<int>(state) + 1) % max_state);
         }
     }
 };
@@ -148,7 +149,15 @@ struct Reflux: Module {
     enum InTrigMode { INTRIG_MODE_GATE, INTRIG_MODE_TRIGGER, INTRIG_MODE_TOGGLE };
     enum InTrigTarget { INTRIG_PLAY_CLIP, INTRIG_PLAY_SLICE, INTRIG_RECORD_CLIP, INTRIG_TARGET_MAX };
     enum InCVMode { INCV_MODE_DISCRETE, INCV_MODE_NORMAL };
-    enum InCVTarget { INCV_SELECT_CLIP, INCV_SELECT_SLICE, INCV_VOL, INCV_PAN, INCV_SPEED, INCV_XHIFT, INCV_TARGET_MAX };
+    enum InCVTarget {
+        INCV_SELECT_CLIP,
+        INCV_SELECT_SLICE,
+        INCV_VOL,
+        INCV_PAN,
+        INCV_SPEED,
+        INCV_XHIFT,
+        INCV_TARGET_MAX
+    };
     enum PlaybackPanelTarget { PLAYBACK_TARGET_CLIP, PLAYBACK_TARGET_SLICE, PLAYBACK_TARGET_MAX };
 
     // State
@@ -157,11 +166,11 @@ struct Reflux: Module {
     std::vector<std::shared_ptr<AudioSlice>> slices {};
     std::string directory_;
 
-    InCVTarget cv0_target = INCV_SELECT_CLIP, cv1_target = INCV_SELECT_SLICE, cv2_target = INCV_VOL, cv3_target = INCV_SPEED;
+    InCVTarget cv0_target = INCV_SELECT_CLIP, cv1_target = INCV_SELECT_SLICE, cv2_target = INCV_VOL,
+               cv3_target = INCV_SPEED;
     InCVMode cv_mode = INCV_MODE_NORMAL;
     InTrigMode trig_mode = INTRIG_MODE_GATE;
     InTrigTarget trig0_target = INTRIG_PLAY_CLIP, trig1_target = INTRIG_PLAY_SLICE;
-    bool global_follow = false;
 
     Eventful<double> selected_clip {0};
     Eventful<double> selected_slice {0};
@@ -213,8 +222,7 @@ struct Reflux: Module {
         {INCV_PAN, 0.63},
         {INCV_VOL, 0.2},
         {INCV_SPEED, 0.78},
-        {INCV_XHIFT, 0.9}
-    };
+        {INCV_XHIFT, 0.9}};
 
     std::map<InTrigTarget, float> in_trig_target_hues {
         {INTRIG_PLAY_CLIP, 0.456},
@@ -229,18 +237,17 @@ struct Reflux: Module {
     BooleanTrigger btntrig_slice_play, btntrig_slice_pause, btntrig_slice_learn;
     BooleanTrigger btntrig_clip_record, btntrig_clip_play, btntrig_clip_pause;
 
-    StatefulButtonController<InCVTarget> 
-        sbc_global_cv0_target {PARAM_GLOBAL_CV0_TARGET, cv0_target, INCV_TARGET_MAX},
+    StatefulButtonController<InCVTarget> sbc_global_cv0_target {PARAM_GLOBAL_CV0_TARGET, cv0_target, INCV_TARGET_MAX},
         sbc_global_cv1_target {PARAM_GLOBAL_CV1_TARGET, cv1_target, INCV_TARGET_MAX},
         sbc_global_cv2_target {PARAM_GLOBAL_CV2_TARGET, cv2_target, INCV_TARGET_MAX},
         sbc_global_cv3_target {PARAM_GLOBAL_CV3_TARGET, cv3_target, INCV_TARGET_MAX};
-    
-    StatefulButtonController<InTrigTarget> 
-        sbc_global_trig0_target {PARAM_GLOBAL_TRIG0_TARGET, trig0_target, INTRIG_TARGET_MAX},
+
+    StatefulButtonController<InTrigTarget> sbc_global_trig0_target {
+        PARAM_GLOBAL_TRIG0_TARGET,
+        trig0_target,
+        INTRIG_TARGET_MAX},
         sbc_global_trig1_target {PARAM_GLOBAL_TRIG1_TARGET, trig1_target, INTRIG_TARGET_MAX};
 
-    BooleanTrigger btntrig_global_cv_mode, btntrig_global_trig_mode, btntrig_global_trig0_taget,
-        btntrig_global_trig1_target;
     BooleanTrigger btntrig_playback_target;
     BooleanTrigger btntrig_playback_mode;
     BooleanTrigger btntrig_playback_pan_vol_mode, btntrig_playback_tuner_switch, btntrig_playback_tuner_mode;
@@ -467,16 +474,17 @@ struct Reflux: Module {
 
     void process_read_input_audio(const ProcessArgs& args) {
         for (IdxType i = 0; i < NUM_CLIPS; i++) {
-            if (clips.at(i).is_recording) {
+            auto& clip = clips.at(i);
+            if (clip.is_recording) {
                 if (i == selected_clip) {
                     double data[2];
                     data[0] = getInput(INPUT_AUDIOL).getVoltage();
                     data[1] = getInput(INPUT_AUDIOR).getVoltage();
                     AudioClip::WriteArgs wargs;
                     wargs.delta = args.sampleTime;
-                    current_clip().write_frame(data, wargs);
+                    clip.write_frame(data, wargs);
                 } else {
-                    clips.at(i).is_recording = false;
+                    clip.is_recording = false;
                 }
             }
         }
@@ -484,12 +492,13 @@ struct Reflux: Module {
 
     void process_read_input_cv(const ProcessArgs& args) {
         float* cv0s = inputs[INPUT_CV0].getVoltages();
+        int num_channels = inputs[INPUT_CV0].getChannels();
         SelectionMode mode = SelectionMode::MIDI_WRAP;
 
-        for (int i = 0; i < PORT_MAX_CHANNELS; i++) {
+        for (int i = 0; i < num_channels; i++) {
             switch (trig0_target) {
                 case InTrigTarget::INTRIG_PLAY_CLIP:
-                    selected_clip_cv[i] = select_idx_by_cv(cv0s[i], mode, clips.size() - 1);
+                    selected_clip_cv[i] = select_idx_by_cv(cv0s[i], mode, NUM_CLIPS - 1);
                     break;
                 case InTrigTarget::INTRIG_PLAY_SLICE:
                     if (slices.size() > 0) {
@@ -502,23 +511,20 @@ struct Reflux: Module {
 
     void process_read_input_trigs(const ProcessArgs& args) {
         bool use_cv0 = inputs[INPUT_CV0].isConnected();
-        for (int i = 0; i < PORT_MAX_CHANNELS; i++) {
+        const int num_channels = inputs[INPUT_TRIGGER0].getChannels();
+        for (int i = 0; i < num_channels; i++) {
             if (intrig_trig0[i].process(inputs[INPUT_TRIGGER0].getVoltage(i) > 0.0)) {
                 switch (trig0_target) {
                     case InTrigTarget::INTRIG_PLAY_CLIP: {
                         const int clip_idx = use_cv0 ? (int)selected_clip_cv[i] : (int)selected_clip;
                         clips[clip_idx].start_playing();
-                        if (global_follow)
-                            selected_clip = clip_idx;
                         break;
                     }
                     case InTrigTarget::INTRIG_PLAY_SLICE: {
-                        if (slices.size() > 0) {
-                            const int slice_idx = use_cv0 ? (int)selected_slice_cv[i] : (int)selected_slice;
-                            slices[slice_idx]->start_playing();
-                            if (global_follow)
-                                selected_slice = slice_idx;
-                        }
+                        if (slices.size() == 0)
+                            break;
+                        const int slice_idx = use_cv0 ? (int)selected_slice_cv[i] : (int)selected_slice;
+                        slices[slice_idx]->start_playing();
                         break;
                     }
                 }
@@ -562,28 +568,30 @@ struct Reflux: Module {
     }
 
     void process_slice_button_events(const ProcessArgs& args) {
+        if (slices.size() == 0) return;
+
         // listen for slice play button event
         if (btntrig_slice_play.process(params[PARAM_SLICE_PLAY].getValue() > 0.0)) {
-            if (current_slice()) {
-                current_slice()->start_playing();
-            }
+            AudioSlice* slice_ptr = current_slice(); 
+            if (!slice_ptr) return;
+            slice_ptr->start_playing();
         }
 
         // listen for slice pause button event
         if (btntrig_slice_pause.process(params[PARAM_SLICE_PAUSE].getValue() > 0.0)) {
-            if (current_slice() && current_slice()->is_playing) {
-                current_slice()->toggle_playing();
+            AudioSlice* slice_ptr = current_slice(); 
+            if (!slice_ptr) return;
+            if (slice_ptr->is_playing) {
+                slice_ptr->toggle_playing();
             }
         }
 
         // listen for slice delete button event
         if (btntrig_slice_delete.process(params[PARAM_SLICE_DELETE].getValue() > 0.0)) {
-            if (current_slice()) {
-                slices.erase(slices.begin() + selected_slice);
-                update_slices_idx();
-                if (selected_slice >= 1.0) {
-                    selected_slice -= 1.0;
-                }
+            slices.erase(slices.begin() + selected_slice);
+            update_slices_idx();
+            if (selected_slice >= 1.0) {
+                selected_slice -= 1.0;
             }
         }
 
@@ -674,9 +682,10 @@ struct Reflux: Module {
         double audio_out_r = 0;
 
         for (int i = 0; i < NUM_CLIPS; i++) {
-            if (clips.at(i).is_playing) {
+            auto& clip = clips.at(i);
+            if (clip.is_playing) {
                 wavefroms_playing += 1;
-                auto frame = clips.at(i).read_frame();
+                auto frame = clip.read_frame();
                 audio_out_l += frame[0];
                 audio_out_r += frame[1];
             }

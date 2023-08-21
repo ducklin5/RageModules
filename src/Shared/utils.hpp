@@ -180,7 +180,7 @@ unsigned int select_idx_by_cv(double cv, SelectionMode mode, unsigned int max_id
         case SelectionMode::MIDI:
             return (unsigned int) clamp(std::round(cv * 12.0), 0.0 , max_idx);
         case SelectionMode::MIDI_WRAP:
-            return (unsigned int)std::round(cv * 12.0) % (max_idx + 1);
+            return ((unsigned int)std::round(cv * 12.0)) % (max_idx + 1);
         case SelectionMode::FRACTION:
             return (unsigned int)std::round( max_idx * clamp(cv, 0.0, max_cv) / max_cv );
     }
