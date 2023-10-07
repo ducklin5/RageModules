@@ -25,7 +25,7 @@ include $(RACK_DIR)/plugin.mk
 
 .PHONY: formatSvgs final 
 
-final: formatSvgs
+final: 
 	+$(MAKE) install
 
 
