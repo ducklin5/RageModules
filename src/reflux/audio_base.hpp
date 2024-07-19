@@ -590,20 +590,20 @@ struct PlaybackProfile {
     EventfulValueRange get_tune_knob_value() {
         switch (tuner_knob_mode) {
             case TunerKnobMode::Range:
-                return {&range, 0.1, 9.99, fmt::format("R{:.2f}", range)};
+                return {&range, 0.1, 9.99, fmt::format("R{:.2f}", range.value)};
             case TunerKnobMode::Frequency:
                 return {&freq, 60, 10000, format_frequency(freq)};
             case TunerKnobMode::Xhift:
-                return {&xhift, 0.1, 4, fmt::format("X{:.2f}", xhift)};
+                return {&xhift, 0.1, 4, fmt::format("X{:.2f}", xhift.value)};
         }
     }
 
     EventfulValueRange get_pv_knob_value() {
         switch (vp_knob_mode) {
             case VPKnobMode::Volume:
-                return {&volume, 0, 1, fmt::format("V{:.2f}", volume)};
+                return {&volume, 0, 1, fmt::format("V{:.2f}", volume.value)};
             case VPKnobMode::Pan:
-                return {&pan, -1, 1, fmt::format("{:.2f}", pan)};
+                return {&pan, -1, 1, fmt::format("{:.2f}", pan.value)};
         }
     }
 
